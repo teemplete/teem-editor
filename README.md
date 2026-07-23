@@ -2,6 +2,8 @@
 
 **Simple. Efficient. Fast.** A lightweight WYSIWYG editor for **React** and **Next.js**, with first-class **RTL** support for Persian and Arabic, plus English and other **LTR** languages.
 
+![TeemEditor screenshot](docs/teem-editor.jpg)
+
 ## Why TeemEditor
 
 - **Simple** — one component, clear API, no heavy schema or plugin maze
