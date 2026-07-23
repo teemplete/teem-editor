@@ -1,0 +1,66 @@
+{
+  "name": "teem-editor",
+  "version": "0.1.0",
+  "description": "TeemEditor — simple, fast WYSIWYG for React and Next.js with full RTL (Persian, Arabic) and LTR support",
+  "license": "MIT",
+  "author": "Erfan",
+  "type": "module",
+  "main": "./dist/teem-editor.cjs",
+  "module": "./dist/teem-editor.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/teem-editor.js",
+      "require": "./dist/teem-editor.cjs"
+    },
+    "./styles.css": "./dist/teem-editor.css"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && cp src/index.d.ts dist/index.d.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "teem-editor",
+    "teemeditor",
+    "wysiwyg",
+    "editor",
+    "react",
+    "nextjs",
+    "rtl",
+    "ltr",
+    "persian",
+    "farsi",
+    "arabic",
+    "i18n",
+    "rich-text",
+    "contenteditable",
+    "performance"
+  ],
+  "peerDependencies": {
+    "react": ">=17.0.0",
+    "react-dom": ">=17.0.0"
+  },
+  "dependencies": {
+    "dompurify": "^3.2.6"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "vite": "^6.3.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  }
+}
