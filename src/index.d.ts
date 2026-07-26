@@ -23,6 +23,8 @@ export type TeemEditorProps = {
   className?: string;
   style?: CSSProperties;
   minHeight?: number;
+  /** When true, editor grows with content. Default: false (max height = viewport, scroll inside). */
+  noscroll?: boolean;
   disabled?: boolean;
   onUpload?: (file: File | Blob, meta: UploadMeta) => Promise<string>;
   uploadOptions?: Omit<UploadOptions, 'onUpload'>;

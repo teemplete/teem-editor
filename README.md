@@ -145,6 +145,7 @@ uploadOptions={{
 | `placeholder` | `string` | Placeholder text |
 | `dir` | `'rtl' \| 'ltr'` | Content direction (defaults from language) |
 | `minHeight` | `number` | Minimum editor height |
+| `noscroll` | `boolean` | Grow with content (default `false` → max height = viewport, scroll inside) |
 | `disabled` | `boolean` | Disable editing |
 | `onUpload` | `(file, meta) => Promise<string>` | Image upload → URL |
 | `uploadOptions` | `object` | Upload validation options |

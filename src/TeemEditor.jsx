@@ -24,7 +24,10 @@ import {
   clearImageSelection,
   updateImageAlt,
 } from './commands.js';
+import { version as TEEM_EDITOR_VERSION } from '../package.json';
 import './styles.css';
+
+const NPM_PACKAGE_URL = 'https://www.npmjs.com/package/teem-editor';
 
 function normalizeEmpty(html) {
   const trimmed = (html || '').trim();
@@ -64,6 +67,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
     className = '',
     style,
     minHeight = 220,
+    noscroll = false,
     disabled = false,
     onUpload,
     uploadOptions,
@@ -450,7 +454,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
   return (
     <div
       ref={rootRef}
-      className={`te-root${disabled ? ' is-disabled' : ''}${sourceMode ? ' is-source' : ''} te-root--${resolvedDir} ${className}`.trim()}
+      className={`te-root${disabled ? ' is-disabled' : ''}${sourceMode ? ' is-source' : ''}${noscroll ? ' te-root--noscroll' : ''} te-root--${resolvedDir} ${className}`.trim()}
       style={style}
       dir={resolvedDir}
       lang={lang}
@@ -527,6 +531,17 @@ export const TeemEditor = forwardRef(function TeemEditor(
             style={{ minHeight }}
           />
         ) : null}
+
+        <a
+          className="te-credit"
+          href={NPM_PACKAGE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          tabIndex={-1}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          powered by TeemEditor v.{TEEM_EDITOR_VERSION}
+        </a>
       </div>
 
       <LinkDialog
