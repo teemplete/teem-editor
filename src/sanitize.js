@@ -23,6 +23,7 @@ const ALLOWED_TAGS = [
   'del',
   'blockquote',
   'pre',
+  'code',
   'a',
   'img',
   'hr',
@@ -51,19 +52,46 @@ const ALLOWED_ATTR = [
   'draggable',
 ];
 
-const SAFE_URL_PROTOCOLS = /^(https?:|mailto:|tel:|blob:)/i;
 const SAFE_IMG_PROTOCOLS = /^(https?:|blob:|data:image\/(png|jpeg|jpg|gif|webp);base64,)/i;
 
 function isSafeUrl(url, forImage = false) {
   if (!url || typeof url !== 'string') return false;
   const trimmed = url.trim();
-  if (trimmed.startsWith('javascript:') || trimmed.startsWith('vbscript:')) {
+  if (!trimmed) return false;
+  if (forImage) {
+    return SAFE_IMG_PROTOCOLS.test(trimmed) || trimmed.startsWith('/');
+  }
+  if (/^(javascript|vbscript|data):/i.test(trimmed)) {
     return false;
   }
   if (trimmed.startsWith('#') || trimmed.startsWith('/')) return true;
-  return forImage
-    ? SAFE_IMG_PROTOCOLS.test(trimmed)
-    : SAFE_URL_PROTOCOLS.test(trimmed) || trimmed.startsWith('/');
+  if (/^(https?|mailto|tel|blob):/i.test(trimmed)) return true;
+  if (trimmed.startsWith('//')) return true;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return false;
+  return true;
+}
+
+const SAFE_URI_REGEXP =
+  /^(?:(?:https?|blob):|data:image\/(?:png|jpeg|jpg|gif|webp);base64,|mailto:|tel:|\/|#)/i;
+
+function purifyHtml(dirty) {
+  return DOMPurify.sanitize(dirty, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR,
+    ALLOW_DATA_ATTR: false,
+    ALLOWED_URI_REGEXP: SAFE_URI_REGEXP,
+    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input', 'style'],
+    FORBID_ATTR: [
+      'onerror',
+      'onload',
+      'onclick',
+      'onmouseover',
+      'onfocus',
+      'onblur',
+      'onchange',
+      'onsubmit',
+    ],
+  });
 }
 
 function sanitizeStyles(styleValue) {
@@ -115,6 +143,28 @@ function sanitizeStyles(styleValue) {
     .join('; ');
 }
 
+function parsePx(value) {
+  if (!value || typeof value !== 'string') return 0;
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)px$/i);
+  return match ? Math.round(Number(match[1])) : 0;
+}
+
+/** Keep explicit image dimensions in both style (px) and HTML attributes. */
+function normalizeImageSize(img) {
+  let width = parsePx(img.style.width) || parseInt(img.getAttribute('width') || '', 10);
+  let height = parsePx(img.style.height) || parseInt(img.getAttribute('height') || '', 10);
+
+  if (width > 0 && height > 0) {
+    img.setAttribute('width', String(width));
+    img.setAttribute('height', String(height));
+    img.style.width = `${width}px`;
+    img.style.height = `${height}px`;
+  }
+
+  if (!img.style.display) img.style.display = 'block';
+  img.style.maxWidth = '100%';
+}
+
 /**
  * Sanitize HTML for safe rendering/storage.
  * Removes scripts, event handlers, and unsafe URLs.
@@ -122,22 +172,7 @@ function sanitizeStyles(styleValue) {
 export function sanitizeHtml(dirty) {
   if (!dirty) return '';
 
-  const clean = DOMPurify.sanitize(dirty, {
-    ALLOWED_TAGS,
-    ALLOWED_ATTR,
-    ALLOW_DATA_ATTR: false,
-    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input', 'style'],
-    FORBID_ATTR: [
-      'onerror',
-      'onload',
-      'onclick',
-      'onmouseover',
-      'onfocus',
-      'onblur',
-      'onchange',
-      'onsubmit',
-    ],
-  });
+  const clean = purifyHtml(dirty);
 
   if (typeof document === 'undefined') return clean;
 
@@ -173,6 +208,7 @@ export function sanitizeHtml(dirty) {
     }
     img.removeAttribute('onerror');
     img.removeAttribute('onload');
+    normalizeImageSize(img);
 
     // Keep images inside a selectable alignment wrapper
     if (!img.parentElement?.classList?.contains('te-figure')) {
@@ -196,8 +232,11 @@ export function sanitizeHtml(dirty) {
     if (!figure.getAttribute('data-align')) {
       figure.setAttribute('data-align', figure.style.textAlign || 'center');
     }
-    figure.querySelectorAll('.te-figure__alt-btn, button').forEach((btn) => btn.remove());
+    figure
+      .querySelectorAll('.te-figure__alt-btn, .te-figure__resize-handle, button')
+      .forEach((btn) => btn.remove());
     figure.classList.remove('is-selected');
+    if (!figure.querySelector('img')) figure.remove();
   });
 
   wrapper.querySelectorAll('img.is-selected').forEach((img) => {

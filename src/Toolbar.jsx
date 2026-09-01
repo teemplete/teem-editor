@@ -236,6 +236,9 @@ export function Toolbar({
   onRememberSelection,
   sourceMode = false,
   onToggleSource,
+  onOpenMarkdown,
+  fullscreen = false,
+  onToggleFullscreen,
 }) {
   const [textColor, setTextColor] = useState('#111827');
   const [bgColor, setBgColor] = useState('#fef08a');
@@ -401,7 +404,12 @@ export function Toolbar({
       <Divider />
 
       <div className="te-toolbar__group">
-        <ToolButton label={t.insertLink} disabled={formattingDisabled} onClick={onOpenLink}>
+        <ToolButton
+          label={states.link ? t.linkEdit : t.insertLink}
+          active={states.link}
+          disabled={formattingDisabled}
+          onClick={onOpenLink}
+        >
           {Icons.link}
         </ToolButton>
         <ToolButton label={t.insertImage} disabled={formattingDisabled} onClick={onOpenImage}>
@@ -457,6 +465,16 @@ export function Toolbar({
           onClick={onToggleSource}
         >
           {Icons.code}
+        </ToolButton>
+        <ToolButton label={t.markdown} className="te-tool--md" onClick={onOpenMarkdown}>
+          {Icons.markdown}
+        </ToolButton>
+        <ToolButton
+          label={fullscreen ? t.exitFullscreen : t.fullscreen}
+          active={fullscreen}
+          onClick={onToggleFullscreen}
+        >
+          {fullscreen ? Icons.exitFullscreen : Icons.fullscreen}
         </ToolButton>
       </div>
     </div>

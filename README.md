@@ -14,26 +14,29 @@
 
 ## Features
 
-- Headings (`h1`–`h6`), paragraphs, and preformatted text
+- Headings (`h1`–`h6`), paragraphs, blockquote, and preformatted text
 - Bullet and numbered lists
 - Bold, italic, strikethrough
-- Blockquote
-- Left / center / right alignment
+- Left / center / right alignment (text and images)
 - Indent / outdent (without accidental blockquotes)
-- Link and image insert (secure upload or URL)
+- Link insert with hover popover to edit or remove
+- Image insert (secure upload or URL), resize, alt-text editing, and alignment
 - Horizontal rule
-- Text color and highlight
+- Text color, highlight, and custom color picker
 - Undo / redo
-- Visual ↔ HTML source toggle
+- **HTML source mode** — CodeMirror editor with syntax highlighting
+- **Markdown import** — paste Markdown and convert to sanitized HTML
+- **Fullscreen** editing (press `Esc` to exit)
+- Toolbar **RTL / LTR** toggles for inline text direction
 - i18n UI: `en` (default), `fa`, `ar`
 
 ## Install
 
 ```bash
-npm install teem-editor dompurify
+npm install teem-editor
 ```
 
-`react` and `react-dom` must already be in your project.
+`react` and `react-dom` must already be in your project. DOMPurify, CodeMirror, and Marked are bundled as dependencies — no extra install step.
 
 Optional font for Persian/Arabic UI: [Vazirmatn](https://fonts.google.com/specimen/Vazirmatn)
 
@@ -76,6 +79,14 @@ export default function MyPage() {
 ```
 
 `dir` defaults to `ltr` for English and `rtl` for `fa` / `ar`. Override anytime with the `dir` prop.
+
+### HTML source & Markdown
+
+Use the toolbar to switch between visual editing and raw HTML, or paste Markdown and insert converted HTML:
+
+- **Edit HTML** — toggle source mode (CodeMirror with HTML highlighting). Changes are sanitized on save.
+- **Markdown** — open the dialog, paste Markdown (GFM), click **Convert & insert**.
+- **Fullscreen** — expand the editor; press `Esc` to exit.
 
 ## Next.js (App Router)
 
@@ -161,6 +172,7 @@ ref.current.focus();
 ref.current.getHTML();
 ref.current.setHTML('<p>Hello</p>');
 ref.current.clear();
+ref.current.getEditorElement(); // contenteditable root (visual mode)
 ```
 
 ## Helpers
@@ -170,7 +182,15 @@ import {
   sanitizeHtml,
   validateImageFile,
   processImageUpload,
+  uploadDefaults,
+  createHistory,
   getMessages,
+  getDefaultDir,
+  resolveLanguage,
+  getBlockOptions,
+  locales,
+  isSafeHref,
+  isSafeImageSrc,
 } from 'teem-editor';
 ```
 

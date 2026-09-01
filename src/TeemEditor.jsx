@@ -7,7 +7,7 @@ import {
   useState,
 } from 'react';
 import { Toolbar } from './Toolbar.jsx';
-import { LinkDialog, ImageDialog, ImageAltDialog } from './Dialogs.jsx';
+import { LinkDialog, LinkPopover, ImageDialog, ImageAltDialog, MarkdownDialog } from './Dialogs.jsx';
 import { sanitizeHtml } from './sanitize.js';
 import { processImageUpload } from './upload.js';
 import { createHistory } from './history.js';
@@ -15,15 +15,24 @@ import { getMessages, getDefaultDir, resolveLanguage } from './i18n.js';
 import {
   applyFormat,
   getActiveStates,
+  getLinkAtSelection,
+  getRangeText,
   insertImage,
   insertLink,
+  removeLinkAt,
+  updateLink,
   restoreSelection,
   saveSelection,
   setDirection,
   selectImage,
   clearImageSelection,
+  removeSelectedImage,
+  startImageResize,
+  whenImageReady,
   updateImageAlt,
 } from './commands.js';
+import { SourceEditor } from './SourceEditor.jsx';
+import { markdownToHtml } from './markdown.js';
 import { version as TEEM_EDITOR_VERSION } from '../package.json';
 import './styles.css';
 
@@ -41,13 +50,16 @@ function stripSelectionClasses(html) {
   if (typeof document !== 'undefined') {
     const wrap = document.createElement('div');
     wrap.innerHTML = html;
-    wrap.querySelectorAll('.te-figure__alt-btn').forEach((el) => el.remove());
+    wrap.querySelectorAll('.te-figure__alt-btn, .te-figure__resize-handle').forEach((el) =>
+      el.remove()
+    );
     wrap.querySelectorAll('.is-selected').forEach((el) => el.classList.remove('is-selected'));
     wrap.querySelectorAll('[class=""]').forEach((el) => el.removeAttribute('class'));
     return wrap.innerHTML;
   }
   return html
     .replace(/<button[^>]*class="[^"]*te-figure__alt-btn[^"]*"[^>]*>.*?<\/button>/gi, '')
+    .replace(/<span[^>]*class="[^"]*te-figure__resize-handle[^"]*"[^>]*>.*?<\/span>/gi, '')
     .replace(/\s*is-selected/g, '')
     .replace(/\sclass=""/g, '')
     .replace(/\sclass=''/g, '');
@@ -101,16 +113,26 @@ export const TeemEditor = forwardRef(function TeemEditor(
     justifyLeft: false,
     format: 'p',
     hasSelectedImage: false,
+    link: false,
   }));
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
+  const [linkEditing, setLinkEditing] = useState(false);
+  const [linkDraft, setLinkDraft] = useState({ url: '', text: '' });
+  const [linkPopover, setLinkPopover] = useState(null);
+  const linkPopoverAnchorRef = useRef(null);
+  const linkEditAnchorRef = useRef(null);
+  const linkPopoverHoverRef = useRef(false);
+  const linkPopoverHideTimerRef = useRef(null);
   const [imageOpen, setImageOpen] = useState(false);
   const [altOpen, setAltOpen] = useState(false);
   const [altDraft, setAltDraft] = useState('');
   const [isEmpty, setIsEmpty] = useState(true);
   const [sourceMode, setSourceMode] = useState(false);
   const [sourceCode, setSourceCode] = useState('');
+  const [markdownOpen, setMarkdownOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const syncHistoryFlags = useCallback(() => {
     setCanUndo(historyRef.current.canUndo());
@@ -305,9 +327,21 @@ export const TeemEditor = forwardRef(function TeemEditor(
         clearImageSelection(editorRef.current);
         selectedImageRef.current = null;
         refreshStates();
+      } else if (e.key === 'Escape' && fullscreen) {
+        setFullscreen(false);
+      } else if (
+        (e.key === 'Delete' || e.key === 'Backspace') &&
+        (selectedImageRef.current || editorRef.current?.querySelector('.te-figure.is-selected'))
+      ) {
+        e.preventDefault();
+        if (removeSelectedImage(editorRef.current)) {
+          selectedImageRef.current = null;
+          emitChange(readHtml());
+          refreshStates();
+        }
       }
     },
-    [handleCommand, handleRedo, handleUndo, refreshStates]
+    [emitChange, handleCommand, handleRedo, handleUndo, readHtml, refreshStates, fullscreen]
   );
 
   const openAltEditor = useCallback((img) => {
@@ -317,10 +351,189 @@ export const TeemEditor = forwardRef(function TeemEditor(
     setAltOpen(true);
   }, []);
 
-  const handleEditorMouseDown = useCallback(
+  const clearLinkPopover = useCallback(() => {
+    if (linkPopoverHideTimerRef.current) {
+      clearTimeout(linkPopoverHideTimerRef.current);
+      linkPopoverHideTimerRef.current = null;
+    }
+    linkPopoverHoverRef.current = false;
+    linkPopoverAnchorRef.current = null;
+    setLinkPopover(null);
+  }, []);
+
+  const cancelHideLinkPopover = useCallback(() => {
+    if (linkPopoverHideTimerRef.current) {
+      clearTimeout(linkPopoverHideTimerRef.current);
+      linkPopoverHideTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleHideLinkPopover = useCallback(() => {
+    cancelHideLinkPopover();
+    linkPopoverHideTimerRef.current = window.setTimeout(() => {
+      if (!linkPopoverHoverRef.current) {
+        linkPopoverAnchorRef.current = null;
+        setLinkPopover(null);
+      }
+    }, 160);
+  }, [cancelHideLinkPopover]);
+
+  const showLinkPopover = useCallback(
+    (anchor) => {
+      const shell = rootRef.current?.querySelector('.te-editor-shell');
+      if (!shell) return;
+
+      const href = anchor.getAttribute('href') || '';
+      if (!href) {
+        clearLinkPopover();
+        return;
+      }
+
+      linkPopoverAnchorRef.current = anchor;
+      const shellRect = shell.getBoundingClientRect();
+      const rect = anchor.getBoundingClientRect();
+      const pad = 8;
+      const estWidth = 132;
+      const anchorCenter = rect.left - shellRect.left + rect.width / 2;
+      let left = anchorCenter - estWidth / 2;
+      left = Math.max(pad, Math.min(shellRect.width - estWidth - pad, left));
+
+      setLinkPopover({
+        url: href,
+        top: rect.bottom - shellRect.top + 6,
+        left,
+      });
+    },
+    [clearLinkPopover]
+  );
+
+  const handlePopoverMouseEnter = useCallback(() => {
+    linkPopoverHoverRef.current = true;
+    cancelHideLinkPopover();
+  }, [cancelHideLinkPopover]);
+
+  const handlePopoverMouseLeave = useCallback(() => {
+    linkPopoverHoverRef.current = false;
+    scheduleHideLinkPopover();
+  }, [scheduleHideLinkPopover]);
+
+  const openLinkEditor = useCallback(
+    (anchor) => {
+      if (!anchor) return;
+      linkEditAnchorRef.current = anchor;
+      setLinkEditing(true);
+      setLinkDraft({
+        url: anchor.getAttribute('href') || '',
+        text: anchor.textContent || '',
+      });
+      clearLinkPopover();
+      setLinkOpen(true);
+    },
+    [clearLinkPopover]
+  );
+
+  const handlePopoverEdit = useCallback(() => {
+    openLinkEditor(linkPopoverAnchorRef.current);
+  }, [openLinkEditor]);
+
+  const handlePopoverUnlink = useCallback(() => {
+    const anchor = linkPopoverAnchorRef.current;
+    if (!anchor || !editorRef.current) return;
+    removeLinkAt(editorRef.current, anchor);
+    emitChange(readHtml());
+    refreshStates();
+    clearLinkPopover();
+  }, [emitChange, readHtml, refreshStates, clearLinkPopover]);
+
+  const closeLinkDialog = useCallback(() => {
+    setLinkOpen(false);
+    setLinkEditing(false);
+    linkEditAnchorRef.current = null;
+  }, []);
+
+  const closeImageDialog = useCallback(() => setImageOpen(false), []);
+  const closeAltDialog = useCallback(() => setAltOpen(false), []);
+  const closeMarkdownDialog = useCallback(() => setMarkdownOpen(false), []);
+
+  const handleEditorMouseMove = useCallback(
+    (e) => {
+      if (sourceMode || disabled || linkOpen) return;
+
+      const target = e.target;
+      if (!(target instanceof Element)) {
+        scheduleHideLinkPopover();
+        return;
+      }
+
+      if (target.closest('.te-link-popover')) return;
+
+      const anchor = target.closest('a[href]');
+      if (!anchor || !editorRef.current?.contains(anchor)) {
+        scheduleHideLinkPopover();
+        return;
+      }
+
+      cancelHideLinkPopover();
+      if (linkPopoverAnchorRef.current === anchor) return;
+      showLinkPopover(anchor);
+    },
+    [
+      sourceMode,
+      disabled,
+      linkOpen,
+      scheduleHideLinkPopover,
+      cancelHideLinkPopover,
+      showLinkPopover,
+    ]
+  );
+
+  const handleEditorMouseLeave = useCallback(() => {
+    scheduleHideLinkPopover();
+  }, [scheduleHideLinkPopover]);
+
+  const handleEditorScroll = useCallback(() => {
+    const anchor = linkPopoverAnchorRef.current;
+    if (!anchor) return;
+    showLinkPopover(anchor);
+  }, [showLinkPopover]);
+
+  const finishImageInsert = useCallback(
+    async (img) => {
+      if (!img || !editorRef.current) return;
+      await whenImageReady(img);
+      selectImage(img, editorRef.current, messagesRef.current);
+      selectedImageRef.current = img;
+      emitChange(readHtml());
+      refreshStates();
+    },
+    [emitChange, readHtml, refreshStates]
+  );
+
+  const handleEditorPointerDown = useCallback(
     (e) => {
       const target = e.target;
       if (!(target instanceof Element) || !editorRef.current) return;
+
+      if (target.closest('.te-figure__resize-handle')) {
+        e.preventDefault();
+        e.stopPropagation();
+        const figure = target.closest('.te-figure');
+        const img = figure?.querySelector('img');
+        if (img && editorRef.current) {
+          startImageResize(img, e, {
+            editor: editorRef.current,
+            onComplete: () => {
+              emitChange(readHtml());
+              if (img.isConnected && editorRef.current?.contains(img)) {
+                selectImage(img, editorRef.current, messagesRef.current);
+                selectedImageRef.current = img;
+              }
+              refreshStates();
+            },
+          });
+        }
+        return;
+      }
 
       // Alt edit button on selected figure
       if (target.closest('.te-figure__alt-btn')) {
@@ -361,9 +574,16 @@ export const TeemEditor = forwardRef(function TeemEditor(
         selectedImageRef.current = null;
         refreshStates();
       }
+
+      const anchor = target.closest('a[href]');
+      if (anchor && editorRef.current.contains(anchor)) {
+        e.preventDefault();
+      }
     },
-    [openAltEditor, refreshStates]
+    [emitChange, openAltEditor, readHtml, refreshStates]
   );
+
+  const handleEditorMouseDown = handleEditorPointerDown;
 
   const handleEditorDoubleClick = useCallback(
     (e) => {
@@ -383,19 +603,61 @@ export const TeemEditor = forwardRef(function TeemEditor(
 
   const openLink = useCallback(() => {
     rememberSelection();
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    restoreSelection(savedRangeRef.current);
+    const linkInfo = getLinkAtSelection(editor, savedRangeRef.current);
+    if (linkInfo) {
+      openLinkEditor(linkInfo.element);
+      return;
+    }
+
+    setLinkEditing(false);
+    linkEditAnchorRef.current = null;
+    setLinkDraft({
+      url: '',
+      text: getRangeText(savedRangeRef.current),
+    });
     setLinkOpen(true);
-  }, [rememberSelection]);
+  }, [rememberSelection, openLinkEditor]);
 
   const openImage = useCallback(() => {
     rememberSelection();
     setImageOpen(true);
   }, [rememberSelection]);
 
+  const openMarkdown = useCallback(() => {
+    rememberSelection();
+    setMarkdownOpen(true);
+  }, [rememberSelection]);
+
+  const handleMarkdownSubmit = useCallback(
+    (markdown) => {
+      const html = markdownToHtml(markdown);
+      if (!html) return;
+
+      if (sourceMode) {
+        const next = sourceCode.trim() ? `${sourceCode}\n${html}` : html;
+        setSourceCode(next);
+        lastHtmlRef.current = sanitizeHtml(normalizeEmpty(next));
+        onChange?.(lastHtmlRef.current);
+        return;
+      }
+
+      withSelection(() => {
+        document.execCommand('insertHTML', false, html);
+      });
+    },
+    [sourceMode, sourceCode, withSelection, onChange]
+  );
+
   const toggleSourceMode = useCallback(() => {
     if (disabled) return;
 
     if (!sourceMode) {
       // Visual → HTML
+      clearLinkPopover();
       clearImageSelection(editorRef.current);
       selectedImageRef.current = null;
       const html = sanitizeHtml(stripSelectionClasses(readHtml()));
@@ -424,10 +686,11 @@ export const TeemEditor = forwardRef(function TeemEditor(
     onChange,
     syncHistoryFlags,
     refreshStates,
+    clearLinkPopover,
   ]);
 
-  const handleSourceChange = useCallback((e) => {
-    setSourceCode(e.target.value);
+  const handleSourceChange = useCallback((code) => {
+    setSourceCode(code);
   }, []);
 
   const handleSourceBlur = useCallback(() => {
@@ -436,6 +699,19 @@ export const TeemEditor = forwardRef(function TeemEditor(
     lastHtmlRef.current = clean;
     onChange?.(clean);
   }, [sourceCode, onChange]);
+
+  const toggleFullscreen = useCallback(() => {
+    setFullscreen((v) => !v);
+  }, []);
+
+  useEffect(() => {
+    if (!fullscreen) return undefined;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [fullscreen]);
 
   useImperativeHandle(ref, () => ({
     focus: () => editorRef.current?.focus(),
@@ -454,7 +730,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
   return (
     <div
       ref={rootRef}
-      className={`te-root${disabled ? ' is-disabled' : ''}${sourceMode ? ' is-source' : ''}${noscroll ? ' te-root--noscroll' : ''} te-root--${resolvedDir} ${className}`.trim()}
+      className={`te-root${disabled ? ' is-disabled' : ''}${sourceMode ? ' is-source' : ''}${fullscreen ? ' is-fullscreen' : ''}${noscroll ? ' te-root--noscroll' : ''} te-root--${resolvedDir} ${className}`.trim()}
       style={style}
       dir={resolvedDir}
       lang={lang}
@@ -479,6 +755,9 @@ export const TeemEditor = forwardRef(function TeemEditor(
           onRememberSelection={rememberSelection}
           sourceMode={sourceMode}
           onToggleSource={toggleSourceMode}
+          onOpenMarkdown={openMarkdown}
+          fullscreen={fullscreen}
+          onToggleFullscreen={toggleFullscreen}
         />
       ) : null}
 
@@ -503,6 +782,10 @@ export const TeemEditor = forwardRef(function TeemEditor(
           onPaste={handlePaste}
           onKeyDown={handleKeyDown}
           onMouseDown={handleEditorMouseDown}
+          onPointerDown={handleEditorPointerDown}
+          onMouseMove={handleEditorMouseMove}
+          onMouseLeave={handleEditorMouseLeave}
+          onScroll={handleEditorScroll}
           onDoubleClick={handleEditorDoubleClick}
           onBlur={() => {
             if (!sourceMode) emitChange(readHtml(), { recordHistory: true });
@@ -519,16 +802,27 @@ export const TeemEditor = forwardRef(function TeemEditor(
         />
 
         {sourceMode ? (
-          <textarea
-            className="te-source"
+          <SourceEditor
             value={sourceCode}
             onChange={handleSourceChange}
             onBlur={handleSourceBlur}
             disabled={disabled}
-            spellCheck={false}
-            dir="ltr"
-            aria-label={t.sourceLabel}
-            style={{ minHeight }}
+            minHeight={minHeight}
+            noscroll={noscroll}
+            ariaLabel={t.sourceLabel}
+          />
+        ) : null}
+
+        {linkPopover && !sourceMode && !linkOpen ? (
+          <LinkPopover
+            url={linkPopover.url}
+            top={linkPopover.top}
+            left={linkPopover.left}
+            t={t}
+            onEdit={handlePopoverEdit}
+            onUnlink={handlePopoverUnlink}
+            onMouseEnter={handlePopoverMouseEnter}
+            onMouseLeave={handlePopoverMouseLeave}
           />
         ) : null}
 
@@ -546,27 +840,34 @@ export const TeemEditor = forwardRef(function TeemEditor(
 
       <LinkDialog
         open={linkOpen && !sourceMode}
-        onClose={() => setLinkOpen(false)}
+        onClose={closeLinkDialog}
+        initialUrl={linkDraft.url}
+        initialText={linkDraft.text}
+        isEdit={linkEditing}
         t={t}
         onSubmit={({ url, text }) => {
           withSelection(() => {
-            insertLink(editorRef.current, url, text, messagesRef.current);
+            const anchor = linkEditAnchorRef.current;
+            if (linkEditing && anchor && editorRef.current?.contains(anchor)) {
+              updateLink(editorRef.current, anchor, url, text, messagesRef.current);
+            } else {
+              insertLink(editorRef.current, url, text, messagesRef.current);
+            }
           });
+          closeLinkDialog();
         }}
       />
 
       <ImageDialog
         open={imageOpen && !sourceMode}
-        onClose={() => setImageOpen(false)}
+        onClose={closeImageDialog}
         t={t}
         onSubmitUrl={async ({ url, alt }) => {
-          withSelection(() => {
-            const img = insertImage(editorRef.current, url, alt, messagesRef.current);
-            if (img) {
-              selectImage(img, editorRef.current, messagesRef.current);
-              selectedImageRef.current = img;
-            }
-          });
+          rememberSelection();
+          restoreSelection(savedRangeRef.current);
+          const img = insertImage(editorRef.current, url, alt, messagesRef.current);
+          closeImageDialog();
+          await finishImageInsert(img);
         }}
         onSubmitFile={async ({ file, alt }) => {
           const src = await processImageUpload(file, {
@@ -575,20 +876,18 @@ export const TeemEditor = forwardRef(function TeemEditor(
             language: lang,
             messages: messagesRef.current,
           });
-          withSelection(() => {
-            const img = insertImage(editorRef.current, src, alt, messagesRef.current);
-            if (img) {
-              selectImage(img, editorRef.current, messagesRef.current);
-              selectedImageRef.current = img;
-            }
-          });
+          rememberSelection();
+          restoreSelection(savedRangeRef.current);
+          const img = insertImage(editorRef.current, src, alt, messagesRef.current);
+          closeImageDialog();
+          await finishImageInsert(img);
         }}
       />
 
       <ImageAltDialog
         open={altOpen && !sourceMode}
         initialAlt={altDraft}
-        onClose={() => setAltOpen(false)}
+        onClose={closeAltDialog}
         t={t}
         onSubmit={({ alt }) => {
           const img = selectedImageRef.current;
@@ -597,6 +896,13 @@ export const TeemEditor = forwardRef(function TeemEditor(
           emitChange(readHtml());
           refreshStates();
         }}
+      />
+
+      <MarkdownDialog
+        open={markdownOpen}
+        onClose={closeMarkdownDialog}
+        t={t}
+        onSubmit={handleMarkdownSubmit}
       />
     </div>
   );
