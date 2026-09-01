@@ -196,9 +196,58 @@ export const Icons = {
       <path {...stroke} d="M14 5l-4 14" />
     </Icon>
   ),
+  markdown: (
+    <svg
+      viewBox="0 0 36 16"
+      dir="ltr"
+      preserveAspectRatio="xMidYMid meet"
+      aria-hidden="true"
+      focusable="false"
+      overflow="visible"
+    >
+      <text
+        x="18"
+        y="8"
+        fill="currentColor"
+        stroke="none"
+        fontSize="18"
+        fontWeight="700"
+        fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
+        textAnchor="middle"
+        dominantBaseline="central"
+        direction="ltr"
+        unicodeBidi="bidi-override"
+      >
+        .md
+      </text>
+    </svg>
+  ),
+  fullscreen: (
+    <Icon>
+      <path {...stroke} d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+    </Icon>
+  ),
+  exitFullscreen: (
+    <Icon>
+      <path {...stroke} d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />
+    </Icon>
+  ),
   close: (
     <Icon size={16}>
       <path {...stroke} d="M6 6l12 12M18 6L6 18" />
+    </Icon>
+  ),
+  edit: (
+    <Icon size={16}>
+      <path {...stroke} d="M12 20h9" />
+      <path {...stroke} d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </Icon>
+  ),
+  unlink: (
+    <Icon size={16}>
+      <path {...stroke} d="M10 13a5 5 0 007.07 0l1.41-1.41a5 5 0 00-7.07-7.07L10 5.93" />
+      <path {...stroke} d="M14 11a5 5 0 00-7.07 0L5.52 12.4a5 5 0 007.07 7.07L14 18.07" />
+      <path {...stroke} d="M4 4l16 16" />
     </Icon>
   ),
 };

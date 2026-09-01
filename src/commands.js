@@ -72,6 +72,69 @@ function getSelectedRange(editor) {
   return range;
 }
 
+export function getLinkAtSelection(editor, range = null) {
+  const activeRange = range || getSelectedRange(editor);
+  if (!activeRange || !editor) return null;
+
+  let node = activeRange.commonAncestorContainer;
+  if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  if (!node || !editor.contains(node)) return null;
+
+  const anchor = node.closest?.('a[href]');
+  if (!anchor || !editor.contains(anchor)) return null;
+
+  return {
+    element: anchor,
+    url: anchor.getAttribute('href') || '',
+    text: anchor.textContent || '',
+  };
+}
+
+export function getRangeText(range) {
+  if (!range || range.collapsed) return '';
+  return range.toString();
+}
+
+export function removeLink(editor) {
+  focusEditor(editor);
+  if (!getLinkAtSelection(editor)) return false;
+  return exec('unlink');
+}
+
+export function selectAnchor(anchor) {
+  if (!anchor) return false;
+  const range = document.createRange();
+  range.selectNodeContents(anchor);
+  return restoreSelection(range);
+}
+
+function applyLinkAttributes(anchor, url) {
+  anchor.setAttribute('href', url);
+  anchor.setAttribute('rel', 'noopener noreferrer');
+  if (/^https?:/i.test(url)) {
+    anchor.setAttribute('target', '_blank');
+  } else {
+    anchor.removeAttribute('target');
+  }
+}
+
+export function updateLink(editor, anchor, url, text, messages) {
+  if (!editor || !anchor || !editor.contains(anchor)) return false;
+  if (!isSafeHref(url)) {
+    throw new Error((messages && messages.linkUnsafe) || 'The link URL is invalid or unsafe.');
+  }
+  applyLinkAttributes(anchor, url);
+  if (text) anchor.textContent = text;
+  return true;
+}
+
+export function removeLinkAt(editor, anchor) {
+  if (!editor || !anchor || !editor.contains(anchor)) return false;
+  selectAnchor(anchor);
+  focusEditor(editor);
+  return exec('unlink');
+}
+
 /**
  * Apply inline style via <span style="...">.
  * Avoids <font color> from execCommand('foreColor'), which sanitizer strips.
@@ -485,6 +548,53 @@ function ensureFigure(img) {
   return figure;
 }
 
+function getImageAspectRatio(img, fallbackWidth) {
+  const naturalW = img.naturalWidth;
+  const naturalH = img.naturalHeight;
+  if (naturalW > 0 && naturalH > 0) return naturalH / naturalW;
+
+  const attrW = parseInt(img.getAttribute('width') || '', 10);
+  const attrH = parseInt(img.getAttribute('height') || '', 10);
+  if (attrW > 0 && attrH > 0) return attrH / attrW;
+
+  const rect = img.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) return rect.height / rect.width;
+
+  return 1;
+}
+
+/** Live preview while dragging — inline style only. */
+function previewImageSize(img, width, height) {
+  img.style.width = `${width}px`;
+  img.style.height = `${height}px`;
+  img.style.maxWidth = '100%';
+  img.style.display = 'block';
+}
+
+/** Persist size in exported HTML via inline px + width/height attributes. */
+export function commitImageSize(img, width, height) {
+  if (!img || width <= 0 || height <= 0) return;
+
+  const w = Math.round(width);
+  const h = Math.round(height);
+  img.setAttribute('width', String(w));
+  img.setAttribute('height', String(h));
+  img.style.width = `${w}px`;
+  img.style.height = `${h}px`;
+  img.style.display = 'block';
+  img.style.maxWidth = '100%';
+}
+
+export function whenImageReady(img) {
+  if (!img) return Promise.resolve();
+  if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => resolve();
+    img.addEventListener('load', done, { once: true });
+    img.addEventListener('error', done, { once: true });
+  });
+}
+
 export function alignImage(img, align) {
   const figure = ensureFigure(img);
   figure.setAttribute('data-align', align);
@@ -531,6 +641,16 @@ export function selectImage(img, editor, messages) {
     : t.editAlt || 'Edit Alt';
   altBtn.title = t.editAltTitle || 'Edit image alt text';
 
+  let resizeHandle = figure.querySelector('.te-figure__resize-handle');
+  if (!resizeHandle) {
+    resizeHandle = document.createElement('span');
+    resizeHandle.className = 'te-figure__resize-handle';
+    resizeHandle.setAttribute('contenteditable', 'false');
+    resizeHandle.setAttribute('role', 'presentation');
+    resizeHandle.title = t.resizeImage || 'Resize image';
+    figure.appendChild(resizeHandle);
+  }
+
   const range = document.createRange();
   range.selectNode(figure);
   const sel = window.getSelection();
@@ -539,12 +659,119 @@ export function selectImage(img, editor, messages) {
   focusEditor(editor);
 }
 
+export function startImageResize(img, startEvent, { editor, onComplete } = {}) {
+  if (!img || !editor || !startEvent) return;
+
+  const figure = img.closest('.te-figure');
+  const usePointer = startEvent.pointerId !== undefined;
+  const pointerId = usePointer ? startEvent.pointerId : null;
+  const startX = startEvent.clientX;
+  const rectWidth = img.getBoundingClientRect().width;
+  const attrWidth = parseInt(img.getAttribute('width') || '', 10);
+  const startWidth = rectWidth > 0 ? rectWidth : attrWidth > 0 ? attrWidth : 200;
+  const ratio = getImageAspectRatio(img, startWidth);
+  const maxWidth = Math.max(48, editor.clientWidth - 16);
+  const editorDir = getComputedStyle(editor).direction;
+  let lastWidth = startWidth;
+  let lastHeight = Math.round(startWidth * ratio);
+
+  const onMove = (ev) => {
+    if (usePointer && ev.pointerId !== pointerId) return;
+    const delta = ev.clientX - startX;
+    const signedDelta = editorDir === 'rtl' ? -delta : delta;
+    lastWidth = Math.round(
+      Math.max(48, Math.min(startWidth + signedDelta, maxWidth))
+    );
+    lastHeight = Math.round(lastWidth * ratio);
+    previewImageSize(img, lastWidth, lastHeight);
+    if (figure) figure.style.width = 'fit-content';
+  };
+
+  const onUp = (ev) => {
+    if (usePointer && ev.pointerId !== pointerId) return;
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    commitImageSize(img, lastWidth, lastHeight);
+    onComplete?.();
+  };
+
+  startEvent.preventDefault();
+  if (usePointer) {
+    const captureTarget = startEvent.currentTarget || startEvent.target;
+    if (captureTarget?.setPointerCapture) {
+      try {
+        captureTarget.setPointerCapture(pointerId);
+      } catch {
+        /* ignore */
+      }
+    }
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  } else {
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+}
+
 export function clearImageSelection(editor) {
   if (!editor) return;
   editor.querySelectorAll('.te-figure.is-selected, img.is-selected').forEach((el) => {
     el.classList.remove('is-selected');
   });
-  editor.querySelectorAll('.te-figure__alt-btn').forEach((btn) => btn.remove());
+  editor.querySelectorAll('.te-figure__alt-btn, .te-figure__resize-handle').forEach((btn) =>
+    btn.remove()
+  );
+}
+
+function placeCaretAfterNodeRemoval(editor, next, prev) {
+  focusEditor(editor);
+  const sel = window.getSelection();
+  if (!sel) return;
+
+  const range = document.createRange();
+
+  if (next && editor.contains(next)) {
+    range.setStart(next, 0);
+    range.collapse(true);
+  } else if (prev && editor.contains(prev)) {
+    range.selectNodeContents(prev);
+    range.collapse(false);
+  } else if (!editor.textContent?.replace(/\u200b/g, '').trim() && !editor.querySelector('img,.te-figure')) {
+    editor.innerHTML = '<p><br></p>';
+    const p = editor.querySelector('p');
+    range.setStart(p, 0);
+    range.collapse(true);
+  } else {
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+export function removeSelectedImage(editor) {
+  if (!editor) return false;
+
+  const selected = editor.querySelector('.te-figure.is-selected, img.is-selected');
+  if (!selected) return false;
+
+  const figure = selected.classList?.contains('te-figure')
+    ? selected
+    : selected.closest?.('.te-figure');
+  if (!figure || !editor.contains(figure)) return false;
+
+  const next = figure.nextElementSibling;
+  const prev = figure.previousElementSibling;
+
+  figure.remove();
+  clearImageSelection(editor);
+  placeCaretAfterNodeRemoval(editor, next, prev);
+  return true;
 }
 
 export function updateImageAlt(img, alt, messages) {
@@ -593,17 +820,12 @@ export function insertLink(editor, url, text, messages) {
     exec('createLink', url);
     const anchors = editor.querySelectorAll('a[href]');
     const last = anchors[anchors.length - 1];
-    if (last) {
-      last.setAttribute('rel', 'noopener noreferrer');
-      if (/^https?:/i.test(url)) last.setAttribute('target', '_blank');
-    }
+    if (last) applyLinkAttributes(last, url);
   } else {
     const label = text || url;
     const safe = document.createElement('a');
-    safe.href = url;
     safe.textContent = label;
-    safe.rel = 'noopener noreferrer';
-    if (/^https?:/i.test(url)) safe.target = '_blank';
+    applyLinkAttributes(safe, url);
     insertNode(editor, safe);
   }
 }
@@ -685,5 +907,6 @@ export function getActiveStates(editor) {
     justifyLeft: imageAlign ? imageAlign === 'left' : queryCommandState('justifyLeft'),
     format: getBlockFormat(),
     hasSelectedImage: !!selectedImage,
+    link: !!getLinkAtSelection(editor),
   };
 }

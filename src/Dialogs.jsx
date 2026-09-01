@@ -4,12 +4,14 @@ import { Icons } from './icons.jsx';
 export function Modal({ open, title, onClose, children, footer, closeLabel = 'Close' }) {
   const titleId = useId();
   const panelRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return undefined;
 
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose?.();
+      if (e.key === 'Escape') onCloseRef.current?.();
     };
     document.addEventListener('keydown', onKey);
 
@@ -20,7 +22,7 @@ export function Modal({ open, title, onClose, children, footer, closeLabel = 'Cl
       document.removeEventListener('keydown', onKey);
       if (prev && typeof prev.focus === 'function') prev.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -58,6 +60,7 @@ export function LinkDialog({
   onSubmit,
   initialUrl = '',
   initialText = '',
+  isEdit = false,
   t,
 }) {
   const [url, setUrl] = useState(initialUrl);
@@ -90,7 +93,7 @@ export function LinkDialog({
   return (
     <Modal
       open={open}
-      title={t.linkTitle}
+      title={isEdit ? t.linkEditTitle : t.linkTitle}
       onClose={onClose}
       closeLabel={t.close}
       footer={
@@ -99,7 +102,7 @@ export function LinkDialog({
             {t.cancel}
           </button>
           <button type="submit" form="te-link-form" className="te-btn te-btn--primary">
-            {t.linkSubmit}
+            {isEdit ? t.save : t.linkSubmit}
           </button>
         </>
       }
@@ -108,9 +111,9 @@ export function LinkDialog({
         <label className="te-field">
           <span>{t.linkUrl}</span>
           <input
-            type="url"
+            type="text"
             dir="ltr"
-            placeholder="https://example.com"
+            placeholder="https://example.com or /about"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             required
@@ -128,6 +131,53 @@ export function LinkDialog({
         {error ? <p className="te-error">{error}</p> : null}
       </form>
     </Modal>
+  );
+}
+
+export function LinkPopover({
+  url,
+  top,
+  left,
+  t,
+  onEdit,
+  onUnlink,
+  onMouseEnter,
+  onMouseLeave,
+}) {
+  return (
+    <div
+      className="te-link-popover"
+      style={{ top, left }}
+      role="dialog"
+      aria-label={t.linkPopoverLabel}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      <div className="te-link-popover__url" dir="ltr" title={url}>
+        {url}
+      </div>
+      <div className="te-link-popover__actions">
+        <button
+          type="button"
+          className="te-link-popover__btn"
+          onClick={onEdit}
+          aria-label={t.linkEdit}
+          title={t.linkEdit}
+        >
+          {Icons.edit}
+        </button>
+        <button
+          type="button"
+          className="te-link-popover__btn te-link-popover__btn--danger"
+          onClick={onUnlink}
+          aria-label={t.removeLink}
+          title={t.removeLink}
+        >
+          {Icons.unlink}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -321,6 +371,69 @@ export function ImageAltDialog({ open, onClose, onSubmit, initialAlt = '', t }) 
           />
         </label>
         <p className="te-hint">{t.altHint}</p>
+      </form>
+    </Modal>
+  );
+}
+
+export function MarkdownDialog({ open, onClose, onSubmit, t }) {
+  const [markdown, setMarkdown] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (open) {
+      setMarkdown('');
+      setError('');
+    }
+  }, [open]);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const trimmed = markdown.trim();
+    if (!trimmed) {
+      setError(t.markdownEmpty);
+      return;
+    }
+    try {
+      onSubmit(trimmed);
+      onClose();
+    } catch (err) {
+      setError(err.message || t.markdownFailed);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title={t.markdownTitle}
+      onClose={onClose}
+      closeLabel={t.close}
+      footer={
+        <>
+          <button type="button" className="te-btn te-btn--ghost" onClick={onClose}>
+            {t.cancel}
+          </button>
+          <button type="submit" form="te-markdown-form" className="te-btn te-btn--primary">
+            {t.markdownSubmit}
+          </button>
+        </>
+      }
+    >
+      <form id="te-markdown-form" onSubmit={handleSubmit} className="te-form">
+        <label className="te-field">
+          <span>{t.markdownLabel}</span>
+          <textarea
+            className="te-textarea"
+            value={markdown}
+            onChange={(e) => setMarkdown(e.target.value)}
+            placeholder={t.markdownPlaceholder}
+            rows={10}
+            dir="auto"
+            spellCheck={false}
+          />
+        </label>
+        <p className="te-hint">{t.markdownHint}</p>
+        {error ? <p className="te-error">{error}</p> : null}
       </form>
     </Modal>
   );
