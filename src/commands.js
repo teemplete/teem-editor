@@ -1,3 +1,4 @@
+import { isEditorContentEmpty } from './content.js';
 import { isSafeHref, isSafeImageSrc, flattenStyleSpans } from './sanitize.js';
 
 export function focusEditor(editor) {
@@ -740,7 +741,7 @@ function placeCaretAfterNodeRemoval(editor, next, prev) {
   } else if (prev && editor.contains(prev)) {
     range.selectNodeContents(prev);
     range.collapse(false);
-  } else if (!editor.textContent?.replace(/\u200b/g, '').trim() && !editor.querySelector('img,.te-figure')) {
+  } else if (isEditorContentEmpty(editor.innerHTML)) {
     editor.innerHTML = '<p><br></p>';
     const p = editor.querySelector('p');
     range.setStart(p, 0);
