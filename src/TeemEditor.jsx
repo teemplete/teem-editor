@@ -34,6 +34,7 @@ import {
 import { SourceEditor } from './SourceEditor.jsx';
 import { markdownToHtml } from './markdown.js';
 import { version as TEEM_EDITOR_VERSION } from '../package.json';
+import { isEditorContentEmpty } from './content.js';
 import './styles.css';
 
 const NPM_PACKAGE_URL = 'https://www.npmjs.com/package/teem-editor';
@@ -143,7 +144,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
     (html, { recordHistory = true } = {}) => {
       const clean = sanitizeHtml(stripSelectionClasses(normalizeEmpty(html)));
       lastHtmlRef.current = clean;
-      setIsEmpty(!clean.replace(/<[^>]+>/g, '').replace(/\u200b/g, '').trim());
+      setIsEmpty(isEditorContentEmpty(clean));
 
       if (recordHistory) {
         historyRef.current.push(clean);
@@ -163,7 +164,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
       const clean = sanitizeHtml(normalizeEmpty(html));
       editorRef.current.innerHTML = clean;
       lastHtmlRef.current = clean;
-      setIsEmpty(!clean.replace(/<[^>]+>/g, '').replace(/\u200b/g, '').trim());
+      setIsEmpty(isEditorContentEmpty(clean));
       selectedImageRef.current = null;
       if (recordHistory) {
         historyRef.current.push(clean);
@@ -180,7 +181,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
     }
     lastHtmlRef.current = initial;
     historyRef.current.reset(initial);
-    setIsEmpty(!initial.replace(/<[^>]+>/g, '').replace(/\u200b/g, '').trim());
+    setIsEmpty(isEditorContentEmpty(initial));
     syncHistoryFlags();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -192,7 +193,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
       const sel = saveSelection(editorRef.current);
       editorRef.current.innerHTML = clean;
       lastHtmlRef.current = clean;
-      setIsEmpty(!clean.replace(/<[^>]+>/g, '').replace(/\u200b/g, '').trim());
+      setIsEmpty(isEditorContentEmpty(clean));
       selectedImageRef.current = null;
       restoreSelection(sel);
     }
@@ -264,7 +265,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
     if (html == null || !editorRef.current) return;
     editorRef.current.innerHTML = html;
     lastHtmlRef.current = html;
-    setIsEmpty(!html.replace(/<[^>]+>/g, '').replace(/\u200b/g, '').trim());
+    setIsEmpty(isEditorContentEmpty(html));
     selectedImageRef.current = null;
     syncHistoryFlags();
     onChange?.(html);
@@ -276,7 +277,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
     if (html == null || !editorRef.current) return;
     editorRef.current.innerHTML = html;
     lastHtmlRef.current = html;
-    setIsEmpty(!html.replace(/<[^>]+>/g, '').replace(/\u200b/g, '').trim());
+    setIsEmpty(isEditorContentEmpty(html));
     selectedImageRef.current = null;
     syncHistoryFlags();
     onChange?.(html);
@@ -672,7 +673,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
       editorRef.current.innerHTML = clean;
     }
     lastHtmlRef.current = clean;
-    setIsEmpty(!clean.replace(/<[^>]+>/g, '').replace(/\u200b/g, '').trim());
+    setIsEmpty(isEditorContentEmpty(clean));
     historyRef.current.push(clean);
     syncHistoryFlags();
     onChange?.(clean);
