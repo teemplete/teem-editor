@@ -7,7 +7,15 @@ import {
   useState,
 } from 'react';
 import { Toolbar } from './Toolbar.jsx';
-import { LinkDialog, LinkPopover, ImageDialog, ImageAltDialog, MarkdownDialog } from './Dialogs.jsx';
+import {
+  LinkDialog,
+  CtaDialog,
+  LinkPopover,
+  ImageDialog,
+  ImageAltDialog,
+  MarkdownDialog,
+  TableContextMenu,
+} from './Dialogs.jsx';
 import { sanitizeHtml } from './sanitize.js';
 import { processImageUpload } from './upload.js';
 import { createHistory } from './history.js';
@@ -16,11 +24,15 @@ import {
   applyFormat,
   getActiveStates,
   getLinkAtSelection,
+  getCtaAtSelection,
+  isCtaAnchor,
   getRangeText,
   insertImage,
   insertLink,
+  insertCta,
   removeLinkAt,
   updateLink,
+  updateCta,
   restoreSelection,
   saveSelection,
   setDirection,
@@ -30,6 +42,7 @@ import {
   startImageResize,
   whenImageReady,
   updateImageAlt,
+  tableCommand,
 } from './commands.js';
 import { SourceEditor } from './SourceEditor.jsx';
 import { markdownToHtml } from './markdown.js';
@@ -115,12 +128,17 @@ export const TeemEditor = forwardRef(function TeemEditor(
     format: 'p',
     hasSelectedImage: false,
     link: false,
+    cta: false,
   }));
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkEditing, setLinkEditing] = useState(false);
   const [linkDraft, setLinkDraft] = useState({ url: '', text: '' });
+  const [ctaOpen, setCtaOpen] = useState(false);
+  const [ctaEditing, setCtaEditing] = useState(false);
+  const [ctaDraft, setCtaDraft] = useState({ url: '', text: '', classes: '' });
+  const ctaEditAnchorRef = useRef(null);
   const [linkPopover, setLinkPopover] = useState(null);
   const linkPopoverAnchorRef = useRef(null);
   const linkEditAnchorRef = useRef(null);
@@ -134,6 +152,13 @@ export const TeemEditor = forwardRef(function TeemEditor(
   const [sourceCode, setSourceCode] = useState('');
   const [markdownOpen, setMarkdownOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [tableMenu, setTableMenu] = useState(null);
+  const tableMenuCellRef = useRef(null);
+
+  const closeTableMenu = useCallback(() => {
+    tableMenuCellRef.current = null;
+    setTableMenu(null);
+  }, []);
 
   const syncHistoryFlags = useCallback(() => {
     setCanUndo(historyRef.current.canUndo());
@@ -433,9 +458,31 @@ export const TeemEditor = forwardRef(function TeemEditor(
     [clearLinkPopover]
   );
 
+  const openCtaEditor = useCallback(
+    (anchor) => {
+      if (!anchor) return;
+      ctaEditAnchorRef.current = anchor;
+      setCtaEditing(true);
+      setCtaDraft({
+        url: anchor.getAttribute('href') || '',
+        text: anchor.textContent || '',
+        classes: anchor.getAttribute('class') || '',
+      });
+      clearLinkPopover();
+      setCtaOpen(true);
+    },
+    [clearLinkPopover]
+  );
+
   const handlePopoverEdit = useCallback(() => {
-    openLinkEditor(linkPopoverAnchorRef.current);
-  }, [openLinkEditor]);
+    const anchor = linkPopoverAnchorRef.current;
+    if (!anchor) return;
+    if (isCtaAnchor(anchor)) {
+      openCtaEditor(anchor);
+      return;
+    }
+    openLinkEditor(anchor);
+  }, [openLinkEditor, openCtaEditor]);
 
   const handlePopoverUnlink = useCallback(() => {
     const anchor = linkPopoverAnchorRef.current;
@@ -452,13 +499,19 @@ export const TeemEditor = forwardRef(function TeemEditor(
     linkEditAnchorRef.current = null;
   }, []);
 
+  const closeCtaDialog = useCallback(() => {
+    setCtaOpen(false);
+    setCtaEditing(false);
+    ctaEditAnchorRef.current = null;
+  }, []);
+
   const closeImageDialog = useCallback(() => setImageOpen(false), []);
   const closeAltDialog = useCallback(() => setAltOpen(false), []);
   const closeMarkdownDialog = useCallback(() => setMarkdownOpen(false), []);
 
   const handleEditorMouseMove = useCallback(
     (e) => {
-      if (sourceMode || disabled || linkOpen) return;
+      if (sourceMode || disabled || linkOpen || ctaOpen) return;
 
       const target = e.target;
       if (!(target instanceof Element)) {
@@ -482,6 +535,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
       sourceMode,
       disabled,
       linkOpen,
+      ctaOpen,
       scheduleHideLinkPopover,
       cancelHideLinkPopover,
       showLinkPopover,
@@ -493,10 +547,60 @@ export const TeemEditor = forwardRef(function TeemEditor(
   }, [scheduleHideLinkPopover]);
 
   const handleEditorScroll = useCallback(() => {
+    closeTableMenu();
     const anchor = linkPopoverAnchorRef.current;
     if (!anchor) return;
     showLinkPopover(anchor);
-  }, [showLinkPopover]);
+  }, [closeTableMenu, showLinkPopover]);
+
+  const handleEditorContextMenu = useCallback(
+    (e) => {
+      if (sourceMode || disabled) return;
+
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+
+      const cell = target.closest('th, td');
+      if (!cell || !editorRef.current?.contains(cell)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      clearLinkPopover();
+
+      const shell = rootRef.current?.querySelector('.te-editor-shell');
+      if (!shell) return;
+
+      const shellRect = shell.getBoundingClientRect();
+      const pad = 8;
+      const menuWidth = 220;
+      const menuHeight = 320;
+
+      let left = e.clientX - shellRect.left;
+      let top = e.clientY - shellRect.top;
+      left = Math.max(pad, Math.min(shellRect.width - menuWidth - pad, left));
+      top = Math.max(pad, Math.min(shellRect.height - menuHeight - pad, top));
+
+      tableMenuCellRef.current = cell;
+      setTableMenu({ top, left });
+    },
+    [sourceMode, disabled, clearLinkPopover]
+  );
+
+  const handleTableMenuAction = useCallback(
+    (action) => {
+      const cell = tableMenuCellRef.current;
+      if (!cell || !editorRef.current?.contains(cell)) {
+        closeTableMenu();
+        return;
+      }
+      if (tableCommand(editorRef.current, action, cell)) {
+        emitChange(readHtml(), { recordHistory: true });
+        refreshStates();
+      }
+      closeTableMenu();
+    },
+    [closeTableMenu, emitChange, readHtml, refreshStates]
+  );
 
   const finishImageInsert = useCallback(
     async (img) => {
@@ -602,12 +706,40 @@ export const TeemEditor = forwardRef(function TeemEditor(
     [openAltEditor]
   );
 
+  const openCta = useCallback(() => {
+    rememberSelection();
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    restoreSelection(savedRangeRef.current);
+    const ctaInfo = getCtaAtSelection(editor, savedRangeRef.current);
+    if (ctaInfo) {
+      openCtaEditor(ctaInfo.element);
+      return;
+    }
+
+    setCtaEditing(false);
+    ctaEditAnchorRef.current = null;
+    setCtaDraft({
+      url: '',
+      text: getRangeText(savedRangeRef.current),
+      classes: '',
+    });
+    setCtaOpen(true);
+  }, [rememberSelection, openCtaEditor]);
+
   const openLink = useCallback(() => {
     rememberSelection();
     const editor = editorRef.current;
     if (!editor) return;
 
     restoreSelection(savedRangeRef.current);
+    const ctaInfo = getCtaAtSelection(editor, savedRangeRef.current);
+    if (ctaInfo) {
+      openCtaEditor(ctaInfo.element);
+      return;
+    }
+
     const linkInfo = getLinkAtSelection(editor, savedRangeRef.current);
     if (linkInfo) {
       openLinkEditor(linkInfo.element);
@@ -621,7 +753,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
       text: getRangeText(savedRangeRef.current),
     });
     setLinkOpen(true);
-  }, [rememberSelection, openLinkEditor]);
+  }, [rememberSelection, openCtaEditor, openLinkEditor]);
 
   const openImage = useCallback(() => {
     rememberSelection();
@@ -750,6 +882,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
           onCommand={handleCommand}
           onBlockChange={handleBlockChange}
           onOpenLink={openLink}
+          onOpenCta={openCta}
           onOpenImage={openImage}
           onUndo={handleUndo}
           onRedo={handleRedo}
@@ -787,6 +920,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
           onMouseMove={handleEditorMouseMove}
           onMouseLeave={handleEditorMouseLeave}
           onScroll={handleEditorScroll}
+          onContextMenu={handleEditorContextMenu}
           onDoubleClick={handleEditorDoubleClick}
           onBlur={() => {
             if (!sourceMode) emitChange(readHtml(), { recordHistory: true });
@@ -814,7 +948,17 @@ export const TeemEditor = forwardRef(function TeemEditor(
           />
         ) : null}
 
-        {linkPopover && !sourceMode && !linkOpen ? (
+        {tableMenu && !sourceMode ? (
+          <TableContextMenu
+            top={tableMenu.top}
+            left={tableMenu.left}
+            t={t}
+            onAction={handleTableMenuAction}
+            onClose={closeTableMenu}
+          />
+        ) : null}
+
+        {linkPopover && !sourceMode && !linkOpen && !ctaOpen ? (
           <LinkPopover
             url={linkPopover.url}
             top={linkPopover.top}
@@ -856,6 +1000,27 @@ export const TeemEditor = forwardRef(function TeemEditor(
             }
           });
           closeLinkDialog();
+        }}
+      />
+
+      <CtaDialog
+        open={ctaOpen && !sourceMode}
+        onClose={closeCtaDialog}
+        initialUrl={ctaDraft.url}
+        initialText={ctaDraft.text}
+        initialClasses={ctaDraft.classes}
+        isEdit={ctaEditing}
+        t={t}
+        onSubmit={({ url, text, classes }) => {
+          withSelection(() => {
+            const anchor = ctaEditAnchorRef.current;
+            if (ctaEditing && anchor && editorRef.current?.contains(anchor)) {
+              updateCta(editorRef.current, anchor, url, text, classes, messagesRef.current);
+            } else {
+              insertCta(editorRef.current, url, text, classes, messagesRef.current);
+            }
+          });
+          closeCtaDialog();
         }}
       />
 

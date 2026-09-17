@@ -49,6 +49,163 @@ function Divider() {
   return <span className="te-toolbar__divider" aria-hidden="true" />;
 }
 
+const TABLE_PICKER_INIT_COLS = 10;
+const TABLE_PICKER_INIT_ROWS = 5;
+const TABLE_PICKER_MAX_COLS = 20;
+const TABLE_PICKER_MAX_ROWS = 20;
+
+function computeTableGridSize(col, row) {
+  if (col < TABLE_PICKER_INIT_COLS && row < TABLE_PICKER_INIT_ROWS) {
+    return { cols: TABLE_PICKER_INIT_COLS, rows: TABLE_PICKER_INIT_ROWS };
+  }
+
+  const cols =
+    col >= TABLE_PICKER_INIT_COLS
+      ? Math.min(TABLE_PICKER_MAX_COLS, col + 1)
+      : TABLE_PICKER_INIT_COLS;
+
+  const rows =
+    row >= TABLE_PICKER_INIT_ROWS
+      ? Math.min(TABLE_PICKER_MAX_ROWS, row + 1)
+      : TABLE_PICKER_INIT_ROWS;
+
+  return { cols, rows };
+}
+
+function TablePickerButton({ label, disabled, onInsert, onRememberSelection, t }) {
+  const [open, setOpen] = useState(false);
+  const [gridCols, setGridCols] = useState(TABLE_PICKER_INIT_COLS);
+  const [gridRows, setGridRows] = useState(TABLE_PICKER_INIT_ROWS);
+  const [hoverCols, setHoverCols] = useState(0);
+  const [hoverRows, setHoverRows] = useState(0);
+  const rootRef = useRef(null);
+
+  const resetGrid = () => {
+    setGridCols(TABLE_PICKER_INIT_COLS);
+    setGridRows(TABLE_PICKER_INIT_ROWS);
+    setHoverCols(0);
+    setHoverRows(0);
+  };
+
+  useEffect(() => {
+    if (!open || disabled) {
+      if (disabled) setOpen(false);
+      return undefined;
+    }
+
+    const onDoc = (e) => {
+      if (!rootRef.current?.contains(e.target)) {
+        setOpen(false);
+        resetGrid();
+      }
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        resetGrid();
+      }
+    };
+
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, disabled]);
+
+  const handleCellHover = (col, row) => {
+    setHoverCols(col);
+    setHoverRows(row);
+    const { cols, rows } = computeTableGridSize(col, row);
+    setGridCols(cols);
+    setGridRows(rows);
+  };
+
+  const handlePick = () => {
+    if (hoverCols < 1 || hoverRows < 1) return;
+    onRememberSelection?.();
+    onInsert({ cols: hoverCols, rows: hoverRows });
+    setOpen(false);
+    resetGrid();
+  };
+
+  return (
+    <div
+      className={`te-table-picker${open ? ' is-open' : ''}${disabled ? ' is-disabled' : ''}`}
+      ref={rootRef}
+    >
+      <button
+        type="button"
+        className={`te-tool${open ? ' is-active' : ''}`}
+        title={label}
+        aria-label={label}
+        aria-expanded={open}
+        aria-haspopup="true"
+        disabled={disabled}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          if (disabled) return;
+          onRememberSelection?.();
+          if (open) {
+            setOpen(false);
+            resetGrid();
+          } else {
+            resetGrid();
+            setOpen(true);
+          }
+        }}
+      >
+        {Icons.table}
+      </button>
+
+      {open && !disabled ? (
+        <div
+          className="te-table-picker__panel"
+          role="dialog"
+          aria-label={label}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <div
+            className="te-table-picker__grid"
+            style={{
+              gridTemplateColumns: `repeat(${gridCols}, 16px)`,
+              gridTemplateRows: `repeat(${gridRows}, 16px)`,
+            }}
+            onMouseLeave={() => {
+              setHoverCols(0);
+              setHoverRows(0);
+              setGridCols(TABLE_PICKER_INIT_COLS);
+              setGridRows(TABLE_PICKER_INIT_ROWS);
+            }}
+          >
+            {Array.from({ length: gridRows * gridCols }, (_, i) => {
+              const row = Math.floor(i / gridCols) + 1;
+              const col = (i % gridCols) + 1;
+              const selected = col <= hoverCols && row <= hoverRows;
+              return (
+                <button
+                  key={`${col}-${row}`}
+                  type="button"
+                  className={`te-table-picker__cell${selected ? ' is-selected' : ''}`}
+                  aria-label={`${col} × ${row}`}
+                  onMouseEnter={() => handleCellHover(col, row)}
+                  onClick={handlePick}
+                />
+              );
+            })}
+          </div>
+          <div className="te-table-picker__size" aria-live="polite">
+            {hoverCols > 0 && hoverRows > 0
+              ? `${hoverCols} × ${hoverRows}`
+              : t.tablePickHint}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ColorSplitButton({
   label,
   icon,
@@ -230,6 +387,7 @@ export function Toolbar({
   onCommand,
   onBlockChange,
   onOpenLink,
+  onOpenCta,
   onOpenImage,
   onUndo,
   onRedo,
@@ -412,9 +570,24 @@ export function Toolbar({
         >
           {Icons.link}
         </ToolButton>
+        <ToolButton
+          label={states.cta ? t.ctaEditTitle : t.insertCta}
+          active={states.cta}
+          disabled={formattingDisabled}
+          onClick={onOpenCta}
+        >
+          {Icons.cta}
+        </ToolButton>
         <ToolButton label={t.insertImage} disabled={formattingDisabled} onClick={onOpenImage}>
           {Icons.image}
         </ToolButton>
+        <TablePickerButton
+          label={t.insertTable}
+          disabled={formattingDisabled}
+          t={t}
+          onRememberSelection={onRememberSelection}
+          onInsert={({ rows, cols }) => onCommand('insertTable', { rows, cols })}
+        />
         <ToolButton
           label={t.horizontalRule}
           disabled={formattingDisabled}
