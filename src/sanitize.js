@@ -29,6 +29,16 @@ const ALLOWED_TAGS = [
   'hr',
   'u',
   'font',
+  'table',
+  'thead',
+  'tbody',
+  'tfoot',
+  'tr',
+  'th',
+  'td',
+  'caption',
+  'colgroup',
+  'col',
 ];
 
 const ALLOWED_ATTR = [
@@ -50,6 +60,14 @@ const ALLOWED_ATTR = [
   'data-align',
   'loading',
   'draggable',
+  'colspan',
+  'rowspan',
+  'scope',
+  'align',
+  'valign',
+  'border',
+  'cellpadding',
+  'cellspacing',
 ];
 
 const SAFE_IMG_PROTOCOLS = /^(https?:|blob:|data:image\/(png|jpeg|jpg|gif|webp);base64,)/i;
@@ -124,6 +142,23 @@ function sanitizeStyles(styleValue) {
     'width',
     'height',
     'box-sizing',
+    'border',
+    'border-collapse',
+    'border-width',
+    'border-style',
+    'border-color',
+    'border-top',
+    'border-right',
+    'border-bottom',
+    'border-left',
+    'vertical-align',
+    'padding',
+    'padding-top',
+    'padding-right',
+    'padding-bottom',
+    'padding-left',
+    'background',
+    'background-color',
   ]);
 
   return styleValue
@@ -249,9 +284,23 @@ export function sanitizeHtml(dirty) {
     else el.removeAttribute('style');
   });
 
+  normalizeTables(wrapper);
+
   flattenStyleSpans(wrapper);
 
   return wrapper.innerHTML;
+}
+
+/** Keep table structure; ensure empty cells remain editable. */
+function normalizeTables(root) {
+  root.querySelectorAll('table').forEach((table) => {
+    table.querySelectorAll('th, td').forEach((cell) => {
+      const text = (cell.textContent || '').replace(/\u200b/g, '').trim();
+      if (!text && !cell.querySelector('img, br')) {
+        cell.innerHTML = '<br>';
+      }
+    });
+  });
 }
 
 function unwrapElement(el) {

@@ -122,6 +122,12 @@ export const Icons = {
       <path {...stroke} d="M14 11a5 5 0 00-7.07 0L5.52 12.4a5 5 0 007.07 7.07L14 18.07" />
     </Icon>
   ),
+  cta: (
+    <Icon>
+      <rect {...stroke} x="4" y="7" width="16" height="10" rx="2" />
+      <path {...stroke} d="M8 12h8" />
+    </Icon>
+  ),
   image: (
     <Icon>
       <rect {...stroke} x="3" y="5" width="18" height="14" rx="2" />
@@ -158,6 +164,12 @@ export const Icons = {
   hr: (
     <Icon>
       <path {...stroke} d="M4 12h16" />
+    </Icon>
+  ),
+  table: (
+    <Icon>
+      <rect {...stroke} x="3" y="5" width="18" height="14" rx="1" />
+      <path {...stroke} d="M3 10h18M3 14h18M9 5v14M15 5v14" />
     </Icon>
   ),
   indent: (
@@ -248,6 +260,19 @@ export const Icons = {
       <path {...stroke} d="M10 13a5 5 0 007.07 0l1.41-1.41a5 5 0 00-7.07-7.07L10 5.93" />
       <path {...stroke} d="M14 11a5 5 0 00-7.07 0L5.52 12.4a5 5 0 007.07 7.07L14 18.07" />
       <path {...stroke} d="M4 4l16 16" />
+    </Icon>
+  ),
+  plus: (
+    <Icon size={16}>
+      <path {...stroke} d="M12 5v14M5 12h14" />
+    </Icon>
+  ),
+  trash: (
+    <Icon size={16}>
+      <path {...stroke} d="M3 6h18" />
+      <path {...stroke} d="M8 6V4h8v2" />
+      <path {...stroke} d="M6 6l1 14h10l1-14" />
+      <path {...stroke} d="M10 11v6M14 11v6" />
     </Icon>
   ),
 };

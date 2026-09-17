@@ -195,22 +195,9 @@ function expandToWord(range) {
   return next;
 }
 
-function styleKeys(el) {
-  const keys = [];
-  for (let i = 0; i < el.style.length; i += 1) keys.push(el.style.item(i));
-  return keys;
-}
-
-function isStyleSpan(el) {
-  if (!el || el.nodeType !== Node.ELEMENT_NODE || el.tagName !== 'SPAN') return false;
-  const keys = styleKeys(el);
-  if (!keys.length) return false;
-  return keys.every((k) => k === 'color' || k === 'background-color');
-}
-
 /**
- * If selection sits inside / exactly on a style span, mutate that span
- * instead of wrapping again.
+ * If selection exactly matches a styled span's contents, mutate that span
+ * instead of wrapping again (works for Google Docs spans with color + bold, etc.).
  */
 function updateExistingInlineStyle(range, styles) {
   let node = range.commonAncestorContainer;
@@ -219,12 +206,12 @@ function updateExistingInlineStyle(range, styles) {
   let candidate = null;
   let el = node;
   while (el) {
-    if (isStyleSpan(el)) {
+    if (el.tagName === 'SPAN' && el.hasAttribute('style')) {
       const spanRange = document.createRange();
       spanRange.selectNodeContents(el);
       if (
-        range.compareBoundaryPoints(Range.START_TO_START, spanRange) >= 0 &&
-        range.compareBoundaryPoints(Range.END_TO_END, spanRange) <= 0
+        range.compareBoundaryPoints(Range.START_TO_START, spanRange) === 0 &&
+        range.compareBoundaryPoints(Range.END_TO_END, spanRange) === 0
       ) {
         candidate = el;
         break;
@@ -255,9 +242,34 @@ function updateExistingInlineStyle(range, styles) {
   return true;
 }
 
+/** Remove inline properties from a detached fragment before re-wrapping. */
+function stripInlineStylesFromRoot(root, properties) {
+  root.querySelectorAll('[style]').forEach((el) => {
+    properties.forEach((prop) => {
+      el.style[prop] = '';
+    });
+    if (!el.getAttribute('style')?.trim() && !el.className) {
+      el.removeAttribute('style');
+    }
+  });
+}
+
 function wrapSelectionWithSpan(editor, styles) {
   const range = getSelectedRange(editor);
   if (!range || range.collapsed) return false;
+
+  const propsToStrip = [];
+  if (styles.color) propsToStrip.push('color');
+  if (styles.backgroundColor) propsToStrip.push('backgroundColor');
+
+  const fragment = range.extractContents();
+  const tmp = document.createElement('div');
+  tmp.appendChild(fragment);
+
+  if (propsToStrip.length) {
+    stripInlineStylesFromRoot(tmp, propsToStrip);
+  }
+  flattenStyleSpans(tmp);
 
   const span = document.createElement('span');
   if (styles.color) span.style.color = styles.color;
@@ -265,16 +277,8 @@ function wrapSelectionWithSpan(editor, styles) {
     span.style.backgroundColor = styles.backgroundColor;
   }
 
-  try {
-    range.surroundContents(span);
-  } catch {
-    const fragment = range.extractContents();
-    const tmp = document.createElement('div');
-    tmp.appendChild(fragment);
-    flattenStyleSpans(tmp);
-    while (tmp.firstChild) span.appendChild(tmp.firstChild);
-    range.insertNode(span);
-  }
+  while (tmp.firstChild) span.appendChild(tmp.firstChild);
+  range.insertNode(span);
 
   const sel = window.getSelection();
   if (sel) {
@@ -348,6 +352,9 @@ export function applyFormat(editor, type, value, options = {}) {
       break;
     case 'insertHorizontalRule':
       exec('insertHorizontalRule');
+      break;
+    case 'insertTable':
+      insertTable(editor, value?.rows ?? 3, value?.cols ?? 3);
       break;
     case 'foreColor':
       applyInlineStyle(editor, { color: value });
@@ -831,6 +838,268 @@ export function insertLink(editor, url, text, messages) {
   }
 }
 
+/** Strip leading dots and keep only valid CSS class tokens. */
+export function normalizeClassList(input) {
+  if (!input || typeof input !== 'string') return '';
+  return input
+    .split(/[\s,]+/)
+    .map((token) => token.trim().replace(/^\.+/, ''))
+    .filter((token) => token && /^-?[_a-zA-Z][\w-]*$/.test(token))
+    .join(' ');
+}
+
+export function isCtaAnchor(anchor) {
+  if (!anchor || anchor.tagName !== 'A') return false;
+  return !!(anchor.getAttribute('class') || '').trim();
+}
+
+export function getCtaAtSelection(editor, range = null) {
+  const link = getLinkAtSelection(editor, range);
+  if (!link || !isCtaAnchor(link.element)) return null;
+  return {
+    ...link,
+    classes: link.element.getAttribute('class') || '',
+  };
+}
+
+export function updateCta(editor, anchor, url, text, classes, messages) {
+  if (!editor || !anchor || !editor.contains(anchor)) return false;
+  if (!isSafeHref(url)) {
+    throw new Error((messages && messages.linkUnsafe) || 'The link URL is invalid or unsafe.');
+  }
+  applyLinkAttributes(anchor, url);
+  if (text) anchor.textContent = text;
+  const classList = normalizeClassList(classes);
+  anchor.className = classList || 'te-cta';
+  return true;
+}
+
+export function insertCta(editor, url, text, classes, messages) {
+  focusEditor(editor);
+  if (!isSafeHref(url)) {
+    throw new Error((messages && messages.linkUnsafe) || 'The link URL is invalid or unsafe.');
+  }
+
+  const classList = normalizeClassList(classes) || 'te-cta';
+  const label = text || url;
+  const anchor = document.createElement('a');
+  anchor.textContent = label;
+  applyLinkAttributes(anchor, url);
+  anchor.className = classList;
+  insertNode(editor, anchor);
+}
+
+function getTableCellContext(cell) {
+  const row = cell?.closest?.('tr');
+  const table = cell?.closest?.('table');
+  if (!row || !table) return null;
+
+  const rows = [...table.rows];
+  const rowIndex = rows.indexOf(row);
+  if (rowIndex < 0) return null;
+
+  const cells = [...row.cells];
+  const cellIndex = cells.indexOf(cell);
+  if (cellIndex < 0) return null;
+
+  let colIndex = 0;
+  for (let i = 0; i < cellIndex; i += 1) {
+    colIndex += cells[i].colSpan || 1;
+  }
+
+  let colCount = 0;
+  rows.forEach((tr) => {
+    let count = 0;
+    [...tr.cells].forEach((c) => {
+      count += c.colSpan || 1;
+    });
+    colCount = Math.max(colCount, count);
+  });
+
+  return {
+    cell,
+    row,
+    table,
+    rowIndex,
+    colIndex,
+    cellIndex,
+    colCount,
+    rowCount: rows.length,
+  };
+}
+
+function findCellAtColIndex(row, targetCol) {
+  let col = 0;
+  for (const c of row.cells) {
+    const span = c.colSpan || 1;
+    if (targetCol >= col && targetCol < col + span) return c;
+    col += span;
+  }
+  return null;
+}
+
+function focusCaretInCell(cell) {
+  if (!cell) return;
+  const range = document.createRange();
+  if (!cell.childNodes.length) {
+    cell.innerHTML = '<br>';
+  }
+  range.selectNodeContents(cell);
+  range.collapse(true);
+  restoreSelection(range);
+}
+
+function createTableRowLike(referenceRow) {
+  const tr = document.createElement('tr');
+  [...referenceRow.cells].forEach((refCell) => {
+    const cell = document.createElement(refCell.tagName.toLowerCase());
+    cell.innerHTML = '<br>';
+    if (refCell.colSpan > 1) cell.colSpan = refCell.colSpan;
+    tr.appendChild(cell);
+  });
+  return tr;
+}
+
+function insertTableRow(editor, cell, position) {
+  const ctx = getTableCellContext(cell);
+  if (!ctx) return false;
+
+  const newRow = createTableRowLike(ctx.row);
+  if (position === 'above') ctx.row.before(newRow);
+  else ctx.row.after(newRow);
+
+  focusEditor(editor);
+  focusCaretInCell(newRow.cells[ctx.cellIndex] || newRow.cells[0]);
+  return true;
+}
+
+function insertTableColumn(editor, cell, side) {
+  const ctx = getTableCellContext(cell);
+  if (!ctx) return false;
+
+  [...ctx.table.rows].forEach((row) => {
+    const target = findCellAtColIndex(row, ctx.colIndex);
+    const sample = target || row.cells[row.cells.length - 1];
+    const tag = sample?.tagName.toLowerCase() || 'td';
+    const newCell = document.createElement(tag);
+    newCell.innerHTML = '<br>';
+
+    if (side === 'left' && target) row.insertBefore(newCell, target);
+    else if (side === 'right' && target) target.after(newCell);
+    else row.appendChild(newCell);
+  });
+
+  focusEditor(editor);
+  const focusRow = ctx.table.rows[ctx.rowIndex];
+  const focusCell = findCellAtColIndex(
+    focusRow,
+    side === 'right' ? ctx.colIndex + 1 : ctx.colIndex
+  );
+  focusCaretInCell(focusCell || focusRow.cells[ctx.cellIndex]);
+  return true;
+}
+
+function deleteTableRow(editor, cell) {
+  const ctx = getTableCellContext(cell);
+  if (!ctx) return false;
+  if (ctx.rowCount <= 1) return deleteTable(editor, cell);
+
+  const nextRow = ctx.row.nextElementSibling;
+  const prevRow = ctx.row.previousElementSibling;
+  ctx.row.remove();
+  focusEditor(editor);
+
+  const focusCell =
+    findCellAtColIndex(nextRow, ctx.colIndex) ||
+    findCellAtColIndex(prevRow, ctx.colIndex) ||
+    nextRow?.cells[0] ||
+    prevRow?.cells[0];
+  focusCaretInCell(focusCell);
+  return true;
+}
+
+function deleteTableColumn(editor, cell) {
+  const ctx = getTableCellContext(cell);
+  if (!ctx) return false;
+  if (ctx.colCount <= 1) return deleteTable(editor, cell);
+
+  [...ctx.table.rows].forEach((row) => {
+    const target = findCellAtColIndex(row, ctx.colIndex);
+    if (target) target.remove();
+  });
+
+  focusEditor(editor);
+  const focusRow = ctx.table.rows[Math.min(ctx.rowIndex, ctx.table.rows.length - 1)];
+  const focusCell =
+    findCellAtColIndex(focusRow, ctx.colIndex) ||
+    focusRow?.cells[ctx.cellIndex] ||
+    focusRow?.cells[0];
+  focusCaretInCell(focusCell);
+  return true;
+}
+
+export function deleteTable(editor, cell) {
+  const table = cell?.closest?.('table');
+  if (!table || !editor?.contains(table)) return false;
+
+  const next = table.nextElementSibling;
+  const prev = table.previousElementSibling;
+  table.remove();
+  focusEditor(editor);
+  placeCaretAfterNodeRemoval(editor, next, prev);
+  return true;
+}
+
+export function tableCommand(editor, action, cell) {
+  if (!editor || !cell || !editor.contains(cell)) return false;
+
+  switch (action) {
+    case 'insertRowAbove':
+      return insertTableRow(editor, cell, 'above');
+    case 'insertRowBelow':
+      return insertTableRow(editor, cell, 'below');
+    case 'insertColumnLeft':
+      return insertTableColumn(editor, cell, 'left');
+    case 'insertColumnRight':
+      return insertTableColumn(editor, cell, 'right');
+    case 'deleteRow':
+      return deleteTableRow(editor, cell);
+    case 'deleteColumn':
+      return deleteTableColumn(editor, cell);
+    case 'deleteTable':
+      return deleteTable(editor, cell);
+    default:
+      return false;
+  }
+}
+
+export function insertTable(editor, rows = 3, cols = 3) {
+  focusEditor(editor);
+
+  const safeRows = Math.max(1, Math.min(20, Number(rows) || 3));
+  const safeCols = Math.max(1, Math.min(20, Number(cols) || 3));
+
+  const table = document.createElement('table');
+  const tbody = document.createElement('tbody');
+
+  for (let r = 0; r < safeRows; r += 1) {
+    const tr = document.createElement('tr');
+    for (let c = 0; c < safeCols; c += 1) {
+      const cell = document.createElement(r === 0 ? 'th' : 'td');
+      cell.innerHTML = '<br>';
+      tr.appendChild(cell);
+    }
+    tbody.appendChild(tr);
+  }
+
+  table.appendChild(tbody);
+  insertNode(editor, table);
+
+  const p = document.createElement('p');
+  p.innerHTML = '<br>';
+  insertNode(editor, p);
+}
+
 export function insertImage(editor, src, alt = '', messages) {
   focusEditor(editor);
   if (!isSafeImageSrc(src)) {
@@ -908,6 +1177,7 @@ export function getActiveStates(editor) {
     justifyLeft: imageAlign ? imageAlign === 'left' : queryCommandState('justifyLeft'),
     format: getBlockFormat(),
     hasSelectedImage: !!selectedImage,
-    link: !!getLinkAtSelection(editor),
+    link: !!getLinkAtSelection(editor) && !getCtaAtSelection(editor),
+    cta: !!getCtaAtSelection(editor),
   };
 }

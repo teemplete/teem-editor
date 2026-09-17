@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import { Icons } from './icons.jsx';
 
 export function Modal({ open, title, onClose, children, footer, closeLabel = 'Close' }) {
@@ -51,6 +51,106 @@ export function Modal({ open, title, onClose, children, footer, closeLabel = 'Cl
         {footer ? <div className="te-modal__footer">{footer}</div> : null}
       </div>
     </div>
+  );
+}
+
+export function CtaDialog({
+  open,
+  onClose,
+  onSubmit,
+  initialUrl = '',
+  initialText = '',
+  initialClasses = '',
+  isEdit = false,
+  t,
+}) {
+  const [url, setUrl] = useState(initialUrl);
+  const [text, setText] = useState(initialText);
+  const [classes, setClasses] = useState(initialClasses);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (open) {
+      setUrl(initialUrl);
+      setText(initialText);
+      setClasses(initialClasses);
+      setError('');
+    }
+  }, [open, initialUrl, initialText, initialClasses]);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const trimmedUrl = url.trim();
+    const trimmedText = text.trim();
+    if (!trimmedUrl) {
+      setError(t.ctaUrlRequired);
+      return;
+    }
+    if (!trimmedText) {
+      setError(t.ctaTextRequired);
+      return;
+    }
+    try {
+      onSubmit({ url: trimmedUrl, text: trimmedText, classes: classes.trim() });
+      onClose();
+    } catch (err) {
+      setError(err.message || t.ctaInvalid);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title={isEdit ? t.ctaEditTitle : t.ctaTitle}
+      onClose={onClose}
+      closeLabel={t.close}
+      footer={
+        <>
+          <button type="button" className="te-btn te-btn--ghost" onClick={onClose}>
+            {t.cancel}
+          </button>
+          <button type="submit" form="te-cta-form" className="te-btn te-btn--primary">
+            {isEdit ? t.save : t.ctaSubmit}
+          </button>
+        </>
+      }
+    >
+      <form id="te-cta-form" onSubmit={handleSubmit} className="te-form">
+        <label className="te-field">
+          <span>{t.ctaUrl}</span>
+          <input
+            type="text"
+            dir="ltr"
+            placeholder="https://example.com or /about"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            required
+          />
+        </label>
+        <label className="te-field">
+          <span>{t.ctaText}</span>
+          <input
+            type="text"
+            placeholder={t.ctaTextPlaceholder}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            required
+          />
+        </label>
+        <label className="te-field">
+          <span>{t.ctaClasses}</span>
+          <input
+            type="text"
+            dir="ltr"
+            placeholder={t.ctaClassesPlaceholder}
+            value={classes}
+            onChange={(e) => setClasses(e.target.value)}
+          />
+        </label>
+        <p className="te-hint">{t.ctaClassesHint}</p>
+        {error ? <p className="te-error">{error}</p> : null}
+      </form>
+    </Modal>
   );
 }
 
@@ -131,6 +231,64 @@ export function LinkDialog({
         {error ? <p className="te-error">{error}</p> : null}
       </form>
     </Modal>
+  );
+}
+
+const TABLE_MENU_ITEMS = [
+  { action: 'insertRowAbove', labelKey: 'tableInsertRowAbove', icon: 'plus' },
+  { action: 'insertRowBelow', labelKey: 'tableInsertRowBelow', icon: 'plus' },
+  { action: 'insertColumnLeft', labelKey: 'tableInsertColumnLeft', icon: 'plus' },
+  { action: 'insertColumnRight', labelKey: 'tableInsertColumnRight', icon: 'plus' },
+  { action: 'deleteRow', labelKey: 'tableDeleteRow', icon: 'trash', danger: true },
+  { action: 'deleteColumn', labelKey: 'tableDeleteColumn', icon: 'trash', danger: true },
+  { action: 'deleteTable', labelKey: 'tableDeleteTable', icon: 'trash', danger: true },
+];
+
+export function TableContextMenu({ top, left, t, onAction, onClose }) {
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    const onDoc = (e) => {
+      if (!menuRef.current?.contains(e.target)) onClose?.();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose?.();
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={menuRef}
+      className="te-table-menu"
+      style={{ top, left }}
+      role="menu"
+      aria-label={t.tableMenuLabel}
+      onMouseDown={(e) => e.preventDefault()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {TABLE_MENU_ITEMS.map((item, index) => (
+        <Fragment key={item.action}>
+          {index === 4 ? <div className="te-table-menu__divider" aria-hidden="true" /> : null}
+          <button
+            type="button"
+            className={`te-table-menu__item${item.danger ? ' te-table-menu__item--danger' : ''}`}
+            role="menuitem"
+            onClick={() => onAction(item.action)}
+          >
+            <span className="te-table-menu__icon" aria-hidden="true">
+              {Icons[item.icon]}
+            </span>
+            <span>{t[item.labelKey]}</span>
+          </button>
+        </Fragment>
+      ))}
+    </div>
   );
 }
 
