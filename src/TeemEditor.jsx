@@ -13,6 +13,7 @@ import {
   LinkPopover,
   ImageDialog,
   ImageAltDialog,
+  ImageLinkDialog,
   MarkdownDialog,
   TableContextMenu,
 } from './Dialogs.jsx';
@@ -42,6 +43,9 @@ import {
   startImageResize,
   whenImageReady,
   updateImageAlt,
+  updateImageLink,
+  getImageLinkInfo,
+  IMAGE_LINK_LIGHTBOX,
   tableCommand,
 } from './commands.js';
 import { SourceEditor } from './SourceEditor.jsx';
@@ -60,11 +64,20 @@ function normalizeEmpty(html) {
   return trimmed;
 }
 
+async function resolveImageLink(link) {
+  if (!link || link.mode === 'none') return { mode: 'none', href: '' };
+  if (link.mode === 'lightbox' || link.mode === 'file') {
+    return { mode: link.mode, href: '' };
+  }
+  if (link.mode === 'url') return { mode: 'url', href: link.href };
+  return { mode: 'none', href: '' };
+}
+
 function stripSelectionClasses(html) {
   if (typeof document !== 'undefined') {
     const wrap = document.createElement('div');
     wrap.innerHTML = html;
-    wrap.querySelectorAll('.te-figure__alt-btn, .te-figure__resize-handle').forEach((el) =>
+    wrap.querySelectorAll('.te-figure__alt-btn, .te-figure__link-btn, .te-figure__resize-handle').forEach((el) =>
       el.remove()
     );
     wrap.querySelectorAll('.is-selected').forEach((el) => el.classList.remove('is-selected'));
@@ -73,6 +86,7 @@ function stripSelectionClasses(html) {
   }
   return html
     .replace(/<button[^>]*class="[^"]*te-figure__alt-btn[^"]*"[^>]*>.*?<\/button>/gi, '')
+    .replace(/<button[^>]*class="[^"]*te-figure__link-btn[^"]*"[^>]*>.*?<\/button>/gi, '')
     .replace(/<span[^>]*class="[^"]*te-figure__resize-handle[^"]*"[^>]*>.*?<\/span>/gi, '')
     .replace(/\s*is-selected/g, '')
     .replace(/\sclass=""/g, '')
@@ -147,6 +161,9 @@ export const TeemEditor = forwardRef(function TeemEditor(
   const [imageOpen, setImageOpen] = useState(false);
   const [altOpen, setAltOpen] = useState(false);
   const [altDraft, setAltDraft] = useState('');
+  const [imageLinkOpen, setImageLinkOpen] = useState(false);
+  const [imageLinkDraft, setImageLinkDraft] = useState({ mode: 'none', href: '' });
+  const [lightboxSrc, setLightboxSrc] = useState(null);
   const [isEmpty, setIsEmpty] = useState(true);
   const [sourceMode, setSourceMode] = useState(false);
   const [sourceCode, setSourceCode] = useState('');
@@ -377,6 +394,16 @@ export const TeemEditor = forwardRef(function TeemEditor(
     setAltOpen(true);
   }, []);
 
+  const openImageLinkEditor = useCallback((img) => {
+    if (!img) return;
+    selectedImageRef.current = img;
+    const info = getImageLinkInfo(img);
+    setImageLinkDraft({ mode: info.mode, href: info.href });
+    setImageLinkOpen(true);
+  }, []);
+
+  const closeImageLinkDialog = useCallback(() => setImageLinkOpen(false), []);
+
   const clearLinkPopover = useCallback(() => {
     if (linkPopoverHideTimerRef.current) {
       clearTimeout(linkPopoverHideTimerRef.current);
@@ -522,7 +549,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
       if (target.closest('.te-link-popover')) return;
 
       const anchor = target.closest('a[href]');
-      if (!anchor || !editorRef.current?.contains(anchor)) {
+      if (!anchor || !editorRef.current?.contains(anchor) || anchor.classList.contains('te-figure__link')) {
         scheduleHideLinkPopover();
         return;
       }
@@ -640,6 +667,16 @@ export const TeemEditor = forwardRef(function TeemEditor(
         return;
       }
 
+      // Link edit button on selected figure
+      if (target.closest('.te-figure__link-btn')) {
+        e.preventDefault();
+        e.stopPropagation();
+        const figure = target.closest('.te-figure');
+        const img = figure?.querySelector('img');
+        if (img) openImageLinkEditor(img);
+        return;
+      }
+
       // Alt edit button on selected figure
       if (target.closest('.te-figure__alt-btn')) {
         e.preventDefault();
@@ -685,7 +722,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
         e.preventDefault();
       }
     },
-    [emitChange, openAltEditor, readHtml, refreshStates]
+    [emitChange, openAltEditor, openImageLinkEditor, readHtml, refreshStates]
   );
 
   const handleEditorMouseDown = handleEditorPointerDown;
@@ -699,6 +736,11 @@ export const TeemEditor = forwardRef(function TeemEditor(
       const image = img || figure?.querySelector('img');
       if (image && editorRef.current.contains(image)) {
         e.preventDefault();
+        const linkInfo = getImageLinkInfo(image);
+        if (linkInfo.mode === IMAGE_LINK_LIGHTBOX) {
+          setLightboxSrc(linkInfo.href || image.getAttribute('src') || image.src);
+          return;
+        }
         selectImage(image, editorRef.current, messagesRef.current);
         openAltEditor(image);
       }
@@ -1028,14 +1070,21 @@ export const TeemEditor = forwardRef(function TeemEditor(
         open={imageOpen && !sourceMode}
         onClose={closeImageDialog}
         t={t}
-        onSubmitUrl={async ({ url, alt }) => {
+        onSubmitUrl={async ({ url, alt, link }) => {
           rememberSelection();
           restoreSelection(savedRangeRef.current);
-          const img = insertImage(editorRef.current, url, alt, messagesRef.current);
+          const resolvedLink = await resolveImageLink(link);
+          const img = insertImage(
+            editorRef.current,
+            url,
+            alt,
+            resolvedLink,
+            messagesRef.current
+          );
           closeImageDialog();
           await finishImageInsert(img);
         }}
-        onSubmitFile={async ({ file, alt }) => {
+        onSubmitFile={async ({ file, alt, link }) => {
           const src = await processImageUpload(file, {
             ...uploadOptions,
             onUpload,
@@ -1044,9 +1093,32 @@ export const TeemEditor = forwardRef(function TeemEditor(
           });
           rememberSelection();
           restoreSelection(savedRangeRef.current);
-          const img = insertImage(editorRef.current, src, alt, messagesRef.current);
+          const resolvedLink = await resolveImageLink(link);
+          const img = insertImage(
+            editorRef.current,
+            src,
+            alt,
+            resolvedLink,
+            messagesRef.current
+          );
           closeImageDialog();
           await finishImageInsert(img);
+        }}
+      />
+
+      <ImageLinkDialog
+        open={imageLinkOpen && !sourceMode}
+        onClose={closeImageLinkDialog}
+        initialMode={imageLinkDraft.mode}
+        initialUrl={imageLinkDraft.href}
+        t={t}
+        onSubmit={async (link) => {
+          const img = selectedImageRef.current;
+          if (!img || !editorRef.current?.contains(img)) return;
+          const resolvedLink = await resolveImageLink(link);
+          updateImageLink(img, resolvedLink, messagesRef.current);
+          emitChange(readHtml());
+          refreshStates();
         }}
       />
 
@@ -1070,6 +1142,28 @@ export const TeemEditor = forwardRef(function TeemEditor(
         t={t}
         onSubmit={handleMarkdownSubmit}
       />
+
+      {lightboxSrc ? (
+        <div
+          className="te-lightbox-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t.imageLinkLightbox}
+          onMouseDown={() => setLightboxSrc(null)}
+        >
+          <div className="te-lightbox" onMouseDown={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="te-lightbox__close"
+              onClick={() => setLightboxSrc(null)}
+              aria-label={t.close}
+            >
+              ×
+            </button>
+            <img src={lightboxSrc} alt="" />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 });

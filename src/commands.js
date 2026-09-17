@@ -119,6 +119,113 @@ function applyLinkAttributes(anchor, url) {
   }
 }
 
+export const IMAGE_LINK_NONE = 'none';
+export const IMAGE_LINK_URL = 'url';
+export const IMAGE_LINK_FILE = 'file';
+export const IMAGE_LINK_LIGHTBOX = 'lightbox';
+
+function getImageLinkAnchor(img) {
+  if (!img) return null;
+  const parent = img.parentElement;
+  if (parent?.tagName === 'A' && parent.classList.contains('te-figure__link')) {
+    return parent;
+  }
+  return null;
+}
+
+export function getImageLinkInfo(img) {
+  if (!img) return { mode: IMAGE_LINK_NONE, href: '' };
+
+  const anchor = getImageLinkAnchor(img);
+  if (!anchor) return { mode: IMAGE_LINK_NONE, href: '' };
+
+  if (
+    anchor.hasAttribute('data-te-lightbox') ||
+    anchor.classList.contains('te-figure__link--lightbox')
+  ) {
+    return {
+      mode: IMAGE_LINK_LIGHTBOX,
+      href: anchor.getAttribute('href') || img.getAttribute('src') || '',
+    };
+  }
+
+  const mode = anchor.getAttribute('data-te-link-mode');
+  return {
+    mode: mode === IMAGE_LINK_FILE ? IMAGE_LINK_FILE : IMAGE_LINK_URL,
+    href: anchor.getAttribute('href') || '',
+  };
+}
+
+function unwrapImageLink(img) {
+  const anchor = getImageLinkAnchor(img);
+  if (!anchor?.parentElement) return;
+  anchor.replaceWith(img);
+}
+
+function wrapImageLink(img, anchor) {
+  const parent = img.parentElement;
+  if (!parent) return;
+  parent.insertBefore(anchor, img);
+  anchor.appendChild(img);
+}
+
+function resolveImageSrcHref(img, href) {
+  const candidate = (href || img.getAttribute('src') || '').trim();
+  if (!candidate) return null;
+  if (isSafeImageSrc(candidate) || isSafeHref(candidate)) return candidate;
+  return null;
+}
+
+export function applyImageLink(img, { mode, href } = {}, messages) {
+  if (!img) return;
+  unwrapImageLink(img);
+
+  if (!mode || mode === IMAGE_LINK_NONE) return;
+
+  const t = messages || {};
+  const anchor = document.createElement('a');
+  anchor.className = 'te-figure__link';
+
+  if (mode === IMAGE_LINK_LIGHTBOX) {
+    const linkHref = resolveImageSrcHref(img, href);
+    if (!linkHref) {
+      throw new Error(
+        (messages && messages.imageLinkInvalid) || 'Invalid image link.'
+      );
+    }
+    anchor.setAttribute('href', linkHref);
+    anchor.classList.add('te-figure__link--lightbox');
+    anchor.setAttribute('data-te-lightbox', 'true');
+    anchor.setAttribute('data-te-link-mode', IMAGE_LINK_LIGHTBOX);
+    anchor.setAttribute('rel', 'noopener noreferrer');
+    anchor.removeAttribute('target');
+  } else if (mode === IMAGE_LINK_FILE) {
+    const linkHref = resolveImageSrcHref(img, href);
+    if (!linkHref) {
+      throw new Error(
+        (messages && messages.imageLinkInvalid) || 'Invalid image link.'
+      );
+    }
+    anchor.setAttribute('href', linkHref);
+    anchor.setAttribute('rel', 'noopener noreferrer');
+    anchor.setAttribute('target', '_blank');
+    anchor.setAttribute('data-te-link-mode', IMAGE_LINK_FILE);
+  } else {
+    const trimmed = (href || '').trim();
+    if (!trimmed || !isSafeHref(trimmed)) {
+      throw new Error((t.linkUnsafe) || 'The link URL is invalid or unsafe.');
+    }
+    applyLinkAttributes(anchor, trimmed);
+    anchor.setAttribute('data-te-link-mode', IMAGE_LINK_URL);
+  }
+
+  wrapImageLink(img, anchor);
+}
+
+export function removeImageLink(img) {
+  unwrapImageLink(img);
+}
+
 export function updateLink(editor, anchor, url, text, messages) {
   if (!editor || !anchor || !editor.contains(anchor)) return false;
   if (!isSafeHref(url)) {
@@ -544,15 +651,15 @@ function alignContent(editor, align, selectedImage) {
 }
 
 function ensureFigure(img) {
-  if (img.parentElement?.classList?.contains('te-figure')) {
-    return img.parentElement;
-  }
+  const existing = img.closest?.('.te-figure');
+  if (existing) return existing;
 
   const figure = document.createElement('div');
   figure.className = 'te-figure';
   figure.setAttribute('contenteditable', 'false');
-  img.replaceWith(figure);
-  figure.appendChild(img);
+  const wrapTarget = getImageLinkAnchor(img) || img;
+  wrapTarget.replaceWith(figure);
+  figure.appendChild(wrapTarget);
   return figure;
 }
 
@@ -649,6 +756,25 @@ export function selectImage(img, editor, messages) {
     : t.editAlt || 'Edit Alt';
   altBtn.title = t.editAltTitle || 'Edit image alt text';
 
+  let linkBtn = figure.querySelector('.te-figure__link-btn');
+  if (!linkBtn) {
+    linkBtn = document.createElement('button');
+    linkBtn.type = 'button';
+    linkBtn.className = 'te-figure__link-btn';
+    linkBtn.setAttribute('contenteditable', 'false');
+    figure.appendChild(linkBtn);
+  }
+  const linkInfo = getImageLinkInfo(img);
+  linkBtn.textContent =
+    linkInfo.mode === IMAGE_LINK_NONE
+      ? t.editImageLink || 'Link'
+      : linkInfo.mode === IMAGE_LINK_LIGHTBOX
+        ? t.imageLinkLightboxShort || 'Lightbox'
+        : linkInfo.mode === IMAGE_LINK_FILE
+          ? t.imageLinkFileShort || 'File'
+          : t.imageLinkSet || 'Linked';
+  linkBtn.title = t.editImageLinkTitle || 'Edit image link';
+
   let resizeHandle = figure.querySelector('.te-figure__resize-handle');
   if (!resizeHandle) {
     resizeHandle = document.createElement('span');
@@ -730,7 +856,7 @@ export function clearImageSelection(editor) {
   editor.querySelectorAll('.te-figure.is-selected, img.is-selected').forEach((el) => {
     el.classList.remove('is-selected');
   });
-  editor.querySelectorAll('.te-figure__alt-btn, .te-figure__resize-handle').forEach((btn) =>
+  editor.querySelectorAll('.te-figure__alt-btn, .te-figure__link-btn, .te-figure__resize-handle').forEach((btn) =>
     btn.remove()
   );
 }
@@ -780,6 +906,25 @@ export function removeSelectedImage(editor) {
   clearImageSelection(editor);
   placeCaretAfterNodeRemoval(editor, next, prev);
   return true;
+}
+
+export function updateImageLink(img, linkOptions, messages) {
+  if (!img) return;
+  applyImageLink(img, linkOptions, messages);
+  const figure = img.closest?.('.te-figure');
+  const btn = figure?.querySelector('.te-figure__link-btn');
+  if (btn) {
+    const t = messages || {};
+    const linkInfo = getImageLinkInfo(img);
+    btn.textContent =
+      linkInfo.mode === IMAGE_LINK_NONE
+        ? t.editImageLink || 'Link'
+        : linkInfo.mode === IMAGE_LINK_LIGHTBOX
+          ? t.imageLinkLightboxShort || 'Lightbox'
+          : linkInfo.mode === IMAGE_LINK_FILE
+            ? t.imageLinkFileShort || 'File'
+            : t.imageLinkSet || 'Linked';
+  }
 }
 
 export function updateImageAlt(img, alt, messages) {
@@ -1100,7 +1245,7 @@ export function insertTable(editor, rows = 3, cols = 3) {
   insertNode(editor, p);
 }
 
-export function insertImage(editor, src, alt = '', messages) {
+export function insertImage(editor, src, alt = '', linkOptions = null, messages) {
   focusEditor(editor);
   if (!isSafeImageSrc(src)) {
     throw new Error((messages && messages.imageUnsafe) || 'The image URL is invalid or unsafe.');
@@ -1126,6 +1271,10 @@ export function insertImage(editor, src, alt = '', messages) {
 
   figure.appendChild(img);
   insertNode(editor, figure);
+
+  if (linkOptions?.mode && linkOptions.mode !== IMAGE_LINK_NONE) {
+    applyImageLink(img, linkOptions, messages);
+  }
 
   // Trailing paragraph for caret after image
   const p = document.createElement('p');
