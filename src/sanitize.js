@@ -58,6 +58,8 @@ const ALLOWED_ATTR = [
   'size',
   'contenteditable',
   'data-align',
+  'data-te-lightbox',
+  'data-te-link-mode',
   'loading',
   'draggable',
   'colspan',
@@ -200,6 +202,14 @@ function normalizeImageSize(img) {
   img.style.maxWidth = '100%';
 }
 
+function getImageLinkAnchor(img) {
+  const parent = img?.parentElement;
+  if (parent?.tagName === 'A' && parent.classList.contains('te-figure__link')) {
+    return parent;
+  }
+  return null;
+}
+
 /**
  * Sanitize HTML for safe rendering/storage.
  * Removes scripts, event handlers, and unsafe URLs.
@@ -245,20 +255,50 @@ export function sanitizeHtml(dirty) {
     img.removeAttribute('onload');
     normalizeImageSize(img);
 
+    const link = getImageLinkAnchor(img);
+    if (link) {
+      const href = link.getAttribute('href') || '';
+      const isLightbox =
+        link.hasAttribute('data-te-lightbox') ||
+        link.classList.contains('te-figure__link--lightbox');
+      const linkMode = link.getAttribute('data-te-link-mode');
+      const hrefOk =
+        isLightbox || linkMode === 'file'
+          ? isSafeUrl(href, true) || isSafeUrl(href, false)
+          : isSafeUrl(href, false);
+      if (!hrefOk) {
+        link.replaceWith(img);
+      } else {
+        link.setAttribute('rel', 'noopener noreferrer');
+        if (isLightbox) {
+          link.classList.add('te-figure__link--lightbox');
+          link.setAttribute('data-te-lightbox', 'true');
+          link.removeAttribute('target');
+        } else if (linkMode === 'file') {
+          link.setAttribute('target', '_blank');
+        } else if (/^https?:/i.test(href)) {
+          link.setAttribute('target', '_blank');
+        } else {
+          link.removeAttribute('target');
+        }
+      }
+    }
+
     // Keep images inside a selectable alignment wrapper
-    if (!img.parentElement?.classList?.contains('te-figure')) {
+    const wrapTarget = link && link.isConnected ? link : img;
+    if (!wrapTarget.closest('.te-figure')) {
       const figure = document.createElement('div');
       figure.className = 'te-figure';
       figure.setAttribute('contenteditable', 'false');
       const align =
         img.style.textAlign ||
         img.getAttribute('data-align') ||
-        img.parentElement?.style?.textAlign ||
+        wrapTarget.parentElement?.style?.textAlign ||
         'center';
       figure.setAttribute('data-align', align);
       figure.style.textAlign = align;
-      img.replaceWith(figure);
-      figure.appendChild(img);
+      wrapTarget.replaceWith(figure);
+      figure.appendChild(wrapTarget);
     }
   });
 
@@ -268,7 +308,7 @@ export function sanitizeHtml(dirty) {
       figure.setAttribute('data-align', figure.style.textAlign || 'center');
     }
     figure
-      .querySelectorAll('.te-figure__alt-btn, .te-figure__resize-handle, button')
+      .querySelectorAll('.te-figure__alt-btn, .te-figure__link-btn, .te-figure__resize-handle, button')
       .forEach((btn) => btn.remove());
     figure.classList.remove('is-selected');
     if (!figure.querySelector('img')) figure.remove();

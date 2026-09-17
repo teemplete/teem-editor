@@ -1,6 +1,6 @@
 {
   "name": "teem-editor",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "TeemEditor — simple, fast WYSIWYG for React and Next.js with full RTL (Persian, Arabic) and LTR support",
   "license": "MIT",
   "author": "Erfan (https://github.com/erfanatp)",

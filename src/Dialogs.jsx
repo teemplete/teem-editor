@@ -339,6 +339,37 @@ export function LinkPopover({
   );
 }
 
+export function ImageLinkFields({ t, mode, onModeChange, url, onUrlChange }) {
+  return (
+    <fieldset className="te-fieldset">
+      <legend>{t.imageLinkTitle}</legend>
+      <label className="te-field">
+        <span>{t.imageLinkMode}</span>
+        <select value={mode} onChange={(e) => onModeChange(e.target.value)}>
+          <option value="none">{t.imageLinkNone}</option>
+          <option value="url">{t.imageLinkUrl}</option>
+          <option value="file">{t.imageLinkFile}</option>
+          <option value="lightbox">{t.imageLinkLightbox}</option>
+        </select>
+      </label>
+      {mode === 'url' ? (
+        <label className="te-field">
+          <span>{t.imageLinkUrlLabel}</span>
+          <input
+            type="text"
+            dir="ltr"
+            placeholder="https://example.com or /about"
+            value={url}
+            onChange={(e) => onUrlChange(e.target.value)}
+          />
+        </label>
+      ) : null}
+      {mode === 'file' ? <p className="te-hint">{t.imageLinkFileHint}</p> : null}
+      {mode === 'lightbox' ? <p className="te-hint">{t.imageLinkLightboxHint}</p> : null}
+    </fieldset>
+  );
+}
+
 export function ImageDialog({
   open,
   onClose,
@@ -350,6 +381,8 @@ export function ImageDialog({
   const [tab, setTab] = useState('file');
   const [url, setUrl] = useState('');
   const [alt, setAlt] = useState('');
+  const [linkMode, setLinkMode] = useState('none');
+  const [linkUrl, setLinkUrl] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const fileRef = useRef(null);
@@ -359,18 +392,32 @@ export function ImageDialog({
       setTab('file');
       setUrl('');
       setAlt('');
+      setLinkMode('none');
+      setLinkUrl('');
       setError('');
       setBusy(false);
       if (fileRef.current) fileRef.current.value = '';
     }
   }, [open]);
 
+  const buildLinkPayload = () => {
+    if (linkMode === 'none') return { mode: 'none', href: '' };
+    if (linkMode === 'lightbox') return { mode: 'lightbox', href: '' };
+    if (linkMode === 'url') {
+      const trimmed = linkUrl.trim();
+      if (!trimmed) throw new Error(t.imageLinkUrlRequired);
+      return { mode: 'url', href: trimmed };
+    }
+    return { mode: 'file', href: '' };
+  };
+
   const handleUrl = async (e) => {
     e.preventDefault();
     setError('');
     setBusy(true);
     try {
-      await onSubmitUrl({ url: url.trim(), alt: alt.trim() });
+      const link = buildLinkPayload();
+      await onSubmitUrl({ url: url.trim(), alt: alt.trim(), link });
       onClose();
     } catch (err) {
       setError(err.message || t.imageInsertFailed);
@@ -389,7 +436,8 @@ export function ImageDialog({
     setError('');
     setBusy(true);
     try {
-      await onSubmitFile({ file, alt: alt.trim() });
+      const link = buildLinkPayload();
+      await onSubmitFile({ file, alt: alt.trim(), link });
       onClose();
     } catch (err) {
       setError(err.message || t.imageUploadFailed);
@@ -456,6 +504,13 @@ export function ImageDialog({
               placeholder={t.imageAltPlaceholder}
             />
           </label>
+          <ImageLinkFields
+            t={t}
+            mode={linkMode}
+            onModeChange={setLinkMode}
+            url={linkUrl}
+            onUrlChange={setLinkUrl}
+          />
           <p className="te-hint">{t.imageHint}</p>
           {error ? <p className="te-error">{error}</p> : null}
         </form>
@@ -481,9 +536,106 @@ export function ImageDialog({
               placeholder={t.imageAltPlaceholder}
             />
           </label>
+          <ImageLinkFields
+            t={t}
+            mode={linkMode}
+            onModeChange={setLinkMode}
+            url={linkUrl}
+            onUrlChange={setLinkUrl}
+          />
           {error ? <p className="te-error">{error}</p> : null}
         </form>
       )}
+    </Modal>
+  );
+}
+
+export function ImageLinkDialog({
+  open,
+  onClose,
+  onSubmit,
+  initialMode = 'none',
+  initialUrl = '',
+  t,
+}) {
+  const [mode, setMode] = useState(initialMode);
+  const [url, setUrl] = useState(initialUrl);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setMode(initialMode);
+      setUrl(initialUrl);
+      setError('');
+      setBusy(false);
+    }
+  }, [open, initialMode, initialUrl]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      if (mode === 'none') {
+        await onSubmit({ mode: 'none', href: '' });
+        onClose();
+        return;
+      }
+      if (mode === 'lightbox' || mode === 'file') {
+        await onSubmit({ mode, href: '' });
+        onClose();
+        return;
+      }
+      if (mode === 'url') {
+        const trimmed = url.trim();
+        if (!trimmed) {
+          setError(t.imageLinkUrlRequired);
+          return;
+        }
+        await onSubmit({ mode: 'url', href: trimmed });
+        onClose();
+        return;
+      }
+    } catch (err) {
+      setError(err.message || t.imageLinkInvalid);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title={t.imageLinkTitle}
+      onClose={onClose}
+      closeLabel={t.close}
+      footer={
+        <>
+          <button type="button" className="te-btn te-btn--ghost" onClick={onClose} disabled={busy}>
+            {t.cancel}
+          </button>
+          <button
+            type="submit"
+            form="te-image-link-form"
+            className="te-btn te-btn--primary"
+            disabled={busy}
+          >
+            {busy ? t.imageBusy : t.save}
+          </button>
+        </>
+      }
+    >
+      <form id="te-image-link-form" onSubmit={handleSubmit} className="te-form">
+        <ImageLinkFields
+          t={t}
+          mode={mode}
+          onModeChange={setMode}
+          url={url}
+          onUrlChange={setUrl}
+        />
+        {error ? <p className="te-error">{error}</p> : null}
+      </form>
     </Modal>
   );
 }
