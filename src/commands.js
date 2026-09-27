@@ -433,6 +433,10 @@ export function applyFormat(editor, type, value, options = {}) {
       break;
     case 'formatBlock': {
       const tag = value || 'p';
+      if (getAccordionTitleElement(editor)) {
+        setAccordionTitleTag(editor, tag);
+        break;
+      }
       exec('formatBlock', tag === 'p' ? 'p' : tag);
       break;
     }
@@ -462,6 +466,9 @@ export function applyFormat(editor, type, value, options = {}) {
       break;
     case 'insertTable':
       insertTable(editor, value?.rows ?? 3, value?.cols ?? 3);
+      break;
+    case 'insertAccordion':
+      insertAccordion(editor, value);
       break;
     case 'foreColor':
       applyInlineStyle(editor, { color: value });
@@ -1218,6 +1225,571 @@ export function tableCommand(editor, action, cell) {
   }
 }
 
+const ACCORDION_TITLE_TAGS = new Set(['h2', 'h3', 'h4', 'h5', 'h6', 'div']);
+
+const ACCORDION_SAMPLE_DEFAULTS = [
+  ['What is your return policy?', 'You can return most items within 30 days of purchase.'],
+  ['How long does shipping take?', 'Most orders arrive within 3 to 5 business days.'],
+  ['Do you offer technical support?', 'Yes. Contact support and we will help you with setup and troubleshooting.'],
+];
+
+function accordionSamples(messages) {
+  const pairs = [
+    [messages?.accordionQ1, messages?.accordionA1],
+    [messages?.accordionQ2, messages?.accordionA2],
+    [messages?.accordionQ3, messages?.accordionA3],
+  ];
+  return pairs.map((pair, index) => [
+    pair[0] || ACCORDION_SAMPLE_DEFAULTS[index][0],
+    pair[1] || ACCORDION_SAMPLE_DEFAULTS[index][1],
+  ]);
+}
+
+function createAccordionItem(tag, question, answer) {
+  const item = document.createElement('div');
+  item.className = 'te-accordion__item';
+
+  const title = document.createElement(ACCORDION_TITLE_TAGS.has(tag) ? tag : 'h3');
+  title.className = 'te-accordion__title';
+  if (question) title.textContent = question;
+  else title.innerHTML = '<br>';
+
+  const panel = document.createElement('div');
+  panel.className = 'te-accordion__panel';
+  const paragraph = document.createElement('p');
+  if (answer) paragraph.textContent = answer;
+  else paragraph.innerHTML = '<br>';
+  panel.appendChild(paragraph);
+
+  item.append(title, panel);
+  return item;
+}
+
+function elementFromRange(range) {
+  let node = range.startContainer;
+  if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  return node;
+}
+
+function textBeforeCaret(container, range) {
+  const probe = range.cloneRange();
+  probe.selectNodeContents(container);
+  probe.setEnd(range.startContainer, range.startOffset);
+  return probe.toString().replace(/\u200b/g, '');
+}
+
+function textAfterCaret(container, range) {
+  const probe = range.cloneRange();
+  probe.selectNodeContents(container);
+  probe.setStart(range.endContainer, range.endOffset);
+  return probe.toString().replace(/\u200b/g, '');
+}
+
+function placeCaret(el, atStart) {
+  if (!el) return;
+  const target = el.matches?.('p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, div')
+    ? el
+    : el.querySelector('p, li, h1, h2, h3, h4, h5, h6, pre, blockquote') || el;
+  const range = document.createRange();
+  range.selectNodeContents(target);
+  range.collapse(atStart);
+  const sel = window.getSelection();
+  if (!sel) return;
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function directAccordionPart(item, className) {
+  return [...item.children].find((el) => el.classList.contains(className)) || null;
+}
+
+function accordionTitleTag(item) {
+  const title = directAccordionPart(item, 'te-accordion__title');
+  const tag = title?.tagName.toLowerCase();
+  return ACCORDION_TITLE_TAGS.has(tag) ? tag : 'h3';
+}
+
+function itemHasText(el) {
+  return !!((el?.textContent || '').replace(/\u200b/g, '').trim());
+}
+
+export function getAccordionTitleElement(editor, range = null) {
+  const active = range || getSelectedRange(editor);
+  if (!active || !editor) return null;
+  const node = elementFromRange(active);
+  const title = node?.closest?.('.te-accordion__title');
+  if (!title || !editor.contains(title)) return null;
+  return title;
+}
+
+export function setAccordionTitleTag(editor, tag) {
+  const title = getAccordionTitleElement(editor);
+  const nextTag = String(tag || '').toLowerCase();
+  if (!title || !ACCORDION_TITLE_TAGS.has(nextTag)) return false;
+  if (title.tagName.toLowerCase() === nextTag) return true;
+
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+  const startNode = range && title.contains(range.startContainer) ? range.startContainer : null;
+  const startOffset = range ? range.startOffset : 0;
+
+  const next = document.createElement(nextTag);
+  next.className = 'te-accordion__title';
+  while (title.firstChild) next.appendChild(title.firstChild);
+  title.replaceWith(next);
+
+  const caret = document.createRange();
+  if (startNode && next.contains(startNode)) {
+    const max =
+      startNode.nodeType === Node.TEXT_NODE ? startNode.length : startNode.childNodes.length;
+    caret.setStart(startNode, Math.min(startOffset, max));
+    caret.collapse(true);
+  } else {
+    caret.selectNodeContents(next);
+    caret.collapse(false);
+  }
+  if (sel) {
+    sel.removeAllRanges();
+    sel.addRange(caret);
+  }
+  return true;
+}
+
+function topLevelBlock(editor, node) {
+  let block = node;
+  if (!block || block === editor) return null;
+  if (block.nodeType === Node.TEXT_NODE) block = block.parentElement;
+  while (block && block.parentElement && block.parentElement !== editor) {
+    block = block.parentElement;
+  }
+  return block && block.parentElement === editor ? block : null;
+}
+
+function blockHasContent(el) {
+  if (!el) return false;
+  const text = (el.textContent || '').replace(/\u200b/g, '').trim();
+  if (text) return true;
+  return !!el.querySelector('img, table, hr, ul, ol');
+}
+
+function placeAccordion(editor, root) {
+  const range = getSelectedRange(editor);
+  const anchor = range ? elementFromRange(range) : null;
+  const host = anchor?.closest?.('.te-accordion');
+  if (host && editor.contains(host)) {
+    host.after(root);
+    return;
+  }
+
+  const block = topLevelBlock(editor, anchor);
+  const canSplit =
+    block &&
+    range?.collapsed &&
+    block.contains(range.startContainer) &&
+    block.matches('p, h1, h2, h3, h4, h5, h6, blockquote, pre');
+
+  if (!canSplit) {
+    if (block) block.after(root);
+    else insertNode(editor, root);
+    return;
+  }
+
+  const after = range.cloneRange();
+  after.selectNodeContents(block);
+  after.setStart(range.endContainer, range.endOffset);
+  const fragment = after.extractContents();
+  const keepBefore = blockHasContent(block);
+  block.after(root);
+
+  const holder = document.createElement('div');
+  holder.appendChild(fragment);
+  if (blockHasContent(holder)) {
+    const afterBlock = document.createElement(block.tagName.toLowerCase());
+    while (holder.firstChild) afterBlock.appendChild(holder.firstChild);
+    root.after(afterBlock);
+  }
+
+  if (!keepBefore) block.remove();
+}
+
+export function insertAccordion(editor, messages) {
+  if (!editor) return;
+  focusEditor(editor);
+
+  const root = document.createElement('div');
+  root.className = 'te-accordion';
+  accordionSamples(messages).forEach(([question, answer]) => {
+    root.appendChild(createAccordionItem('h3', question, answer));
+  });
+
+  placeAccordion(editor, root);
+
+  if (!root.nextElementSibling) {
+    const trail = document.createElement('p');
+    trail.innerHTML = '<br>';
+    root.after(trail);
+  }
+
+  const title = root.querySelector('.te-accordion__title');
+  if (title) placeCaret(title, true);
+}
+
+function insertAccordionItemAfter(item) {
+  const next = createAccordionItem(accordionTitleTag(item), '', '');
+  item.after(next);
+  placeCaret(directAccordionPart(next, 'te-accordion__title'), true);
+}
+
+function isEntireElementSelected(el, range) {
+  if (!el || !range || range.collapsed) return false;
+  const probe = document.createRange();
+  probe.selectNodeContents(el);
+  return (
+    range.compareBoundaryPoints(Range.START_TO_START, probe) === 0 &&
+    range.compareBoundaryPoints(Range.END_TO_END, probe) === 0
+  );
+}
+
+function selectionAnchorInTitle(title) {
+  const sel = window.getSelection();
+  if (!sel) return true;
+  const anchor = sel.anchorNode;
+  const focus = sel.focusNode;
+  return title.contains(anchor) || title.contains(focus);
+}
+
+function applyControlledRangeEdit(range, event) {
+  const type = event.inputType || '';
+  if (type.startsWith('delete')) {
+    range.deleteContents();
+    return;
+  }
+  if ((type === 'insertText' || type === 'insertReplacementText') && event.data != null) {
+    range.deleteContents();
+    const text = document.createTextNode(event.data);
+    range.insertNode(text);
+    range.setStartAfter(text);
+    range.collapse(true);
+    const sel = window.getSelection();
+    if (sel) {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+}
+
+export function repairAccordionItem(item) {
+  if (!item) return false;
+  let changed = false;
+
+  let title = directAccordionPart(item, 'te-accordion__title');
+  let panel = directAccordionPart(item, 'te-accordion__panel');
+
+  const nestedPanel = title?.querySelector(':scope > .te-accordion__panel');
+  if (nestedPanel && title) {
+    title.after(nestedPanel);
+    panel = nestedPanel;
+    changed = true;
+  }
+
+  if (title) {
+    title
+      .querySelectorAll(
+        ':scope > p, :scope > div:not(.te-accordion__panel), :scope > ul, :scope > ol, :scope > blockquote, :scope > pre, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6'
+      )
+      .forEach((node) => {
+        if (!panel) {
+          panel = document.createElement('div');
+          panel.className = 'te-accordion__panel';
+          panel.innerHTML = '<p><br></p>';
+          item.appendChild(panel);
+        }
+        panel.insertBefore(node, panel.firstChild);
+        changed = true;
+      });
+  }
+
+  const tag = accordionTitleTag(item);
+  if (!title) {
+    title = document.createElement(tag);
+    title.className = 'te-accordion__title';
+    title.innerHTML = '<br>';
+    item.insertBefore(title, item.firstChild);
+    changed = true;
+  } else if (!title.classList.contains('te-accordion__title')) {
+    title.classList.add('te-accordion__title');
+    changed = true;
+  }
+
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'te-accordion__panel';
+    panel.innerHTML = '<p><br></p>';
+    title.after(panel);
+    changed = true;
+  } else if (!panel.classList.contains('te-accordion__panel')) {
+    panel.classList.add('te-accordion__panel');
+    changed = true;
+  }
+
+  [...item.children].forEach((child) => {
+    if (child !== title && child !== panel) {
+      panel.appendChild(child);
+      changed = true;
+    }
+  });
+
+  if (title.nextElementSibling !== panel) {
+    title.after(panel);
+    changed = true;
+  }
+
+  const titleEmpty = !(title.textContent || '').replace(/\u200b/g, '').trim();
+  if (titleEmpty && !title.querySelector('br')) {
+    title.innerHTML = '<br>';
+    changed = true;
+  }
+
+  return changed;
+}
+
+export function repairAccordionStructure(editor) {
+  if (!editor) return false;
+  let changed = false;
+  editor.querySelectorAll('.te-accordion__item').forEach((item) => {
+    if (repairAccordionItem(item)) changed = true;
+  });
+  return changed;
+}
+
+export function clampAccordionSelection(editor) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed || !editor) return false;
+  const range = sel.getRangeAt(0);
+  if (!editor.contains(range.commonAncestorContainer)) return false;
+
+  const item = elementFromRange(range)?.closest?.('.te-accordion__item');
+  if (!item) return false;
+
+  const title = directAccordionPart(item, 'te-accordion__title');
+  const panel = directAccordionPart(item, 'te-accordion__panel');
+  if (!title || !panel) return false;
+
+  const crosses = range.intersectsNode(title) && range.intersectsNode(panel);
+  if (!crosses) return false;
+
+  const clipped = range.cloneRange();
+  if (selectionAnchorInTitle(title)) {
+    clipped.setEnd(title, title.childNodes.length);
+  } else {
+    clipped.setStart(panel, 0);
+  }
+
+  sel.removeAllRanges();
+  sel.addRange(clipped);
+  return true;
+}
+
+export function handleAccordionBeforeInput(editor, event) {
+  if (!editor || event.isComposing) return false;
+  const range = getSelectedRange(editor);
+  if (!range) return false;
+
+  const item = elementFromRange(range)?.closest?.('.te-accordion__item');
+  if (!item) return false;
+
+  const title = directAccordionPart(item, 'te-accordion__title');
+  const panel = directAccordionPart(item, 'te-accordion__panel');
+  if (!title || !panel) return false;
+
+  if (range.intersectsNode(title) && range.intersectsNode(panel)) {
+    event.preventDefault();
+    const clipped = range.cloneRange();
+    if (selectionAnchorInTitle(title)) {
+      clipped.setEnd(title, title.childNodes.length);
+    } else {
+      clipped.setStart(panel, 0);
+    }
+    applyControlledRangeEdit(clipped, event);
+    repairAccordionItem(item);
+    return true;
+  }
+
+  if (title.contains(range.commonAncestorContainer) && isEntireElementSelected(title, range)) {
+    const type = event.inputType || '';
+    if (type === 'insertText' || type === 'insertReplacementText') {
+      event.preventDefault();
+      const text = event.data ?? '';
+      if (text) title.textContent = text;
+      else title.innerHTML = '<br>';
+      placeCaret(title, false);
+      return true;
+    }
+    if (type.startsWith('delete')) {
+      event.preventDefault();
+      title.innerHTML = '<br>';
+      placeCaret(title, true);
+      return true;
+    }
+  }
+
+  if (panel.contains(range.commonAncestorContainer) && isEntireElementSelected(panel, range)) {
+    const type = event.inputType || '';
+    if (type === 'insertText' || type === 'insertReplacementText') {
+      event.preventDefault();
+      panel.innerHTML = '<p><br></p>';
+      const paragraph = panel.querySelector('p');
+      if (event.data) paragraph.textContent = event.data;
+      placeCaret(paragraph || panel, false);
+      return true;
+    }
+    if (type.startsWith('delete')) {
+      event.preventDefault();
+      panel.innerHTML = '<p><br></p>';
+      placeCaret(panel.querySelector('p') || panel, true);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function deleteAccordionItem(editor, item) {
+  const accordion = item.closest('.te-accordion');
+  if (!accordion) return false;
+
+  const items = [...accordion.children].filter((el) => el.classList.contains('te-accordion__item'));
+  const index = items.indexOf(item);
+  const focusItem = items[index + 1] || items[index - 1];
+  item.remove();
+
+  if (!accordion.querySelector('.te-accordion__item')) {
+    const after = accordion.nextElementSibling;
+    accordion.remove();
+    if (after && editor.contains(after)) placeCaret(after, true);
+    else focusEditor(editor);
+    return true;
+  }
+
+  const focus =
+    focusItem?.querySelector('.te-accordion__title') ||
+    focusItem?.querySelector('.te-accordion__panel p');
+  placeCaret(focus, true);
+  return true;
+}
+
+export function accordionCommand(editor, action, item) {
+  if (!editor || !item || !editor.contains(item)) return false;
+  focusEditor(editor);
+
+  switch (action) {
+    case 'addItem':
+      insertAccordionItemAfter(item);
+      return true;
+    case 'duplicateItem': {
+      const clone = item.cloneNode(true);
+      item.after(clone);
+      repairAccordionItem(clone);
+      placeCaret(directAccordionPart(clone, 'te-accordion__title'), true);
+      return true;
+    }
+    case 'deleteItem':
+      return deleteAccordionItem(editor, item);
+    default:
+      return false;
+  }
+}
+
+function removeEmptyAccordionItem(title) {
+  const item = title.closest('.te-accordion__item');
+  const accordion = title.closest('.te-accordion');
+  if (!item || !accordion) return;
+  const items = [...accordion.children].filter((el) => el.classList.contains('te-accordion__item'));
+  if (items.length < 2 || itemHasText(item)) return;
+  const index = items.indexOf(item);
+  const focusItem = items[index - 1] || items[index + 1];
+  item.remove();
+  if (!accordion.querySelector('.te-accordion__item')) accordion.remove();
+  const focus =
+    focusItem?.querySelector('.te-accordion__panel p') ||
+    focusItem?.querySelector('.te-accordion__title');
+  placeCaret(focus, false);
+}
+
+export function handleAccordionKeyDown(editor, event) {
+  if (!editor || event.isComposing || event.keyCode === 229) return false;
+  if (event.metaKey || event.ctrlKey || event.altKey) return false;
+  const range = getSelectedRange(editor);
+  if (!range) return false;
+
+  const node = elementFromRange(range);
+  if (!node || !editor.contains(node)) return false;
+
+  const title = node.closest('.te-accordion__title');
+  const panel = title ? null : node.closest('.te-accordion__panel');
+  if (!title && !panel) return false;
+
+  if (event.key === 'Enter' && !event.shiftKey) {
+    if (title) {
+      event.preventDefault();
+      const itemPanel = title.parentElement?.querySelector(':scope > .te-accordion__panel');
+      const target =
+        itemPanel?.querySelector('p, li, h2, h3, h4, h5, h6, pre, blockquote') || itemPanel;
+      placeCaret(target, true);
+      return true;
+    }
+
+    const item = panel.parentElement;
+    const accordion = item?.parentElement;
+    const items = accordion
+      ? [...accordion.children].filter((el) => el.classList.contains('te-accordion__item'))
+      : [];
+    const atEndOfLast =
+      range.collapsed &&
+      items[items.length - 1] === item &&
+      !node.closest('li, pre') &&
+      textAfterCaret(panel, range).trim() === '';
+    if (!atEndOfLast) return false;
+
+    event.preventDefault();
+    insertAccordionItemAfter(item);
+    return true;
+  }
+
+  if (!range.collapsed) return false;
+
+  if (event.key === 'Backspace' && title && textBeforeCaret(title, range).trim() === '') {
+    event.preventDefault();
+    removeEmptyAccordionItem(title);
+    return true;
+  }
+
+  if (event.key === 'Backspace' && panel && textBeforeCaret(panel, range).trim() === '') {
+    event.preventDefault();
+    return true;
+  }
+
+  if (event.key === 'Delete' && title && textAfterCaret(title, range).trim() === '') {
+    event.preventDefault();
+    return true;
+  }
+
+  if (event.key === 'Delete' && panel && textAfterCaret(panel, range).trim() === '') {
+    event.preventDefault();
+    return true;
+  }
+
+  return false;
+}
+
+export function getAccordionItemAtTarget(target, editor) {
+  if (!target || !editor) return null;
+  const el = target instanceof Element ? target : target.parentElement;
+  const item = el?.closest?.('.te-accordion__item');
+  if (!item || !editor.contains(item)) return null;
+  return item;
+}
+
 export function insertTable(editor, rows = 3, cols = 3) {
   focusEditor(editor);
 
@@ -1315,6 +1887,8 @@ export function getActiveStates(editor) {
     imageAlign = figure?.getAttribute('data-align') || null;
   }
 
+  const accordionTitle = getAccordionTitleElement(editor);
+
   return {
     bold: queryCommandState('bold'),
     italic: queryCommandState('italic'),
@@ -1324,7 +1898,8 @@ export function getActiveStates(editor) {
     justifyRight: imageAlign ? imageAlign === 'right' : queryCommandState('justifyRight'),
     justifyCenter: imageAlign ? imageAlign === 'center' : queryCommandState('justifyCenter'),
     justifyLeft: imageAlign ? imageAlign === 'left' : queryCommandState('justifyLeft'),
-    format: getBlockFormat(),
+    format: accordionTitle ? accordionTitle.tagName.toLowerCase() : getBlockFormat(),
+    accordionTitle: accordionTitle ? accordionTitle.tagName.toLowerCase() : null,
     hasSelectedImage: !!selectedImage,
     link: !!getLinkAtSelection(editor) && !getCtaAtSelection(editor),
     cta: !!getCtaAtSelection(editor),

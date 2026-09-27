@@ -325,6 +325,7 @@ export function sanitizeHtml(dirty) {
   });
 
   normalizeTables(wrapper);
+  normalizeAccordions(wrapper);
 
   flattenStyleSpans(wrapper);
 
@@ -340,6 +341,55 @@ function normalizeTables(root) {
         cell.innerHTML = '<br>';
       }
     });
+  });
+}
+
+const ACCORDION_TITLE_TAG = /^(H[2-6]|DIV)$/;
+
+function isAccordionPartEmpty(el) {
+  const text = (el.textContent || '').replace(/\u200b/g, '').trim();
+  if (text) return false;
+  return !el.querySelector('img, table, hr, ul, ol, br');
+}
+
+function normalizeAccordions(root) {
+  root.querySelectorAll('.te-accordion').forEach((accordion) => {
+    [...accordion.querySelectorAll(':scope > .te-accordion__item')].forEach((item) => {
+      let title = [...item.children].find((el) => el.classList.contains('te-accordion__title'));
+      let panel = [...item.children].find((el) => el.classList.contains('te-accordion__panel'));
+
+      if (title && !ACCORDION_TITLE_TAG.test(title.tagName)) {
+        const next = document.createElement('h3');
+        next.className = 'te-accordion__title';
+        while (title.firstChild) next.appendChild(title.firstChild);
+        title.replaceWith(next);
+        title = next;
+      }
+
+      if (!title) {
+        title = document.createElement('h3');
+        title.className = 'te-accordion__title';
+        title.innerHTML = '<br>';
+        item.insertBefore(title, item.firstChild);
+      } else if (title !== item.firstElementChild) {
+        item.insertBefore(title, item.firstElementChild);
+      }
+
+      if (isAccordionPartEmpty(title)) title.innerHTML = '<br>';
+
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.className = 'te-accordion__panel';
+        panel.innerHTML = '<p><br></p>';
+        item.appendChild(panel);
+      } else if (title.nextElementSibling !== panel) {
+        title.after(panel);
+      }
+
+      if (isAccordionPartEmpty(panel)) panel.innerHTML = '<p><br></p>';
+    });
+
+    if (!accordion.querySelector(':scope > .te-accordion__item')) accordion.remove();
   });
 }
 

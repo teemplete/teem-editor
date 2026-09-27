@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icons } from './icons.jsx';
-import { getBlockOptions } from './i18n.js';
+import { getAccordionTitleOptions, getBlockOptions } from './i18n.js';
 
 const TEXT_COLORS = [
   '#111827',
@@ -47,6 +47,78 @@ function ToolButton({ label, active, disabled, onClick, children, className = ''
 
 function Divider() {
   return <span className="te-toolbar__divider" aria-hidden="true" />;
+}
+
+function ComponentsMenu({ label, itemLabel, disabled, onInsert, onRememberSelection }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    if (!open || disabled) {
+      if (disabled) setOpen(false);
+      return undefined;
+    }
+
+    const onDoc = (e) => {
+      if (!rootRef.current?.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, disabled]);
+
+  return (
+    <div
+      className={`te-components${open ? ' is-open' : ''}${disabled ? ' is-disabled' : ''}`}
+      ref={rootRef}
+    >
+      <button
+        type="button"
+        className={`te-tool te-components__trigger${open ? ' is-active' : ''}`}
+        title={label}
+        aria-label={label}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        disabled={disabled}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          if (disabled) return;
+          onRememberSelection?.();
+          setOpen((value) => !value);
+        }}
+      >
+        {Icons.plus}
+        <span className="te-components__label">{label}</span>
+        {Icons.chevronDown}
+      </button>
+
+      {open && !disabled ? (
+        <div className="te-components__menu" role="menu" onMouseDown={(e) => e.preventDefault()}>
+          <button
+            type="button"
+            className="te-components__item"
+            role="menuitem"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              onRememberSelection?.();
+              onInsert?.();
+              setOpen(false);
+            }}
+          >
+            {Icons.accordion}
+            <span>{itemLabel}</span>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 const TABLE_PICKER_INIT_COLS = 10;
@@ -401,7 +473,7 @@ export function Toolbar({
   const [textColor, setTextColor] = useState('#111827');
   const [bgColor, setBgColor] = useState('#fef08a');
   const formattingDisabled = sourceMode;
-  const blockOptions = getBlockOptions(t);
+  const blockOptions = states.accordionTitle ? getAccordionTitleOptions(t) : getBlockOptions(t);
 
   return (
     <div className="te-toolbar" role="toolbar" aria-label={t.toolbar}>
@@ -587,6 +659,13 @@ export function Toolbar({
           t={t}
           onRememberSelection={onRememberSelection}
           onInsert={({ rows, cols }) => onCommand('insertTable', { rows, cols })}
+        />
+        <ComponentsMenu
+          label={t.components}
+          itemLabel={t.accordion}
+          disabled={formattingDisabled}
+          onRememberSelection={onRememberSelection}
+          onInsert={() => onCommand('insertAccordion')}
         />
         <ToolButton
           label={t.horizontalRule}

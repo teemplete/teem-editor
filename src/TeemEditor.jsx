@@ -16,6 +16,7 @@ import {
   ImageLinkDialog,
   MarkdownDialog,
   TableContextMenu,
+  AccordionContextMenu,
 } from './Dialogs.jsx';
 import { sanitizeHtml } from './sanitize.js';
 import { processImageUpload } from './upload.js';
@@ -24,6 +25,12 @@ import { getMessages, getDefaultDir, resolveLanguage } from './i18n.js';
 import {
   applyFormat,
   getActiveStates,
+  handleAccordionKeyDown,
+  handleAccordionBeforeInput,
+  repairAccordionStructure,
+  clampAccordionSelection,
+  accordionCommand,
+  getAccordionItemAtTarget,
   getLinkAtSelection,
   getCtaAtSelection,
   isCtaAnchor,
@@ -143,6 +150,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
     hasSelectedImage: false,
     link: false,
     cta: false,
+    accordionTitle: null,
   }));
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
@@ -171,11 +179,23 @@ export const TeemEditor = forwardRef(function TeemEditor(
   const [fullscreen, setFullscreen] = useState(false);
   const [tableMenu, setTableMenu] = useState(null);
   const tableMenuCellRef = useRef(null);
+  const [accordionMenu, setAccordionMenu] = useState(null);
+  const accordionMenuItemRef = useRef(null);
 
   const closeTableMenu = useCallback(() => {
     tableMenuCellRef.current = null;
     setTableMenu(null);
   }, []);
+
+  const closeAccordionMenu = useCallback(() => {
+    accordionMenuItemRef.current = null;
+    setAccordionMenu(null);
+  }, []);
+
+  const closeEditorContextMenus = useCallback(() => {
+    closeTableMenu();
+    closeAccordionMenu();
+  }, [closeAccordionMenu, closeTableMenu]);
 
   const syncHistoryFlags = useCallback(() => {
     setCanUndo(historyRef.current.canUndo());
@@ -252,6 +272,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
       const sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) return;
       if (editorRef.current.contains(sel.anchorNode)) {
+        clampAccordionSelection(editorRef.current);
         refreshStates();
       }
     };
@@ -283,9 +304,14 @@ export const TeemEditor = forwardRef(function TeemEditor(
         if (type === 'rtl' || type === 'ltr') {
           setDirection(editorRef.current, type);
         } else {
-          applyFormat(editorRef.current, type, value, {
-            selectedImage: selectedImageRef.current,
-          });
+          applyFormat(
+            editorRef.current,
+            type,
+            type === 'insertAccordion' ? messagesRef.current : value,
+            {
+              selectedImage: selectedImageRef.current,
+            }
+          );
         }
       });
     },
@@ -328,9 +354,23 @@ export const TeemEditor = forwardRef(function TeemEditor(
 
   const handleInput = useCallback(() => {
     if (composingRef.current) return;
+    if (editorRef.current?.querySelector('.te-accordion__item')) {
+      repairAccordionStructure(editorRef.current);
+    }
     emitChange(readHtml());
     refreshStates();
   }, [emitChange, readHtml, refreshStates]);
+
+  const handleBeforeInput = useCallback(
+    (e) => {
+      if (composingRef.current || sourceMode || disabled) return;
+      if (!handleAccordionBeforeInput(editorRef.current, e)) return;
+      repairAccordionStructure(editorRef.current);
+      emitChange(readHtml());
+      refreshStates();
+    },
+    [disabled, emitChange, readHtml, refreshStates, sourceMode]
+  );
 
   const handlePaste = useCallback(
     (e) => {
@@ -342,6 +382,9 @@ export const TeemEditor = forwardRef(function TeemEditor(
         document.execCommand('insertHTML', false, clean);
       } else {
         document.execCommand('insertText', false, text);
+      }
+      if (editorRef.current?.querySelector('.te-accordion__item')) {
+        repairAccordionStructure(editorRef.current);
       }
       emitChange(readHtml());
     },
@@ -372,6 +415,10 @@ export const TeemEditor = forwardRef(function TeemEditor(
         refreshStates();
       } else if (e.key === 'Escape' && fullscreen) {
         setFullscreen(false);
+      } else if (handleAccordionKeyDown(editorRef.current, e)) {
+        repairAccordionStructure(editorRef.current);
+        emitChange(readHtml());
+        refreshStates();
       } else if (
         (e.key === 'Delete' || e.key === 'Backspace') &&
         (selectedImageRef.current || editorRef.current?.querySelector('.te-figure.is-selected'))
@@ -574,11 +621,26 @@ export const TeemEditor = forwardRef(function TeemEditor(
   }, [scheduleHideLinkPopover]);
 
   const handleEditorScroll = useCallback(() => {
-    closeTableMenu();
+    closeEditorContextMenus();
     const anchor = linkPopoverAnchorRef.current;
     if (!anchor) return;
     showLinkPopover(anchor);
-  }, [closeTableMenu, showLinkPopover]);
+  }, [closeEditorContextMenus, showLinkPopover]);
+
+  const openShellContextMenu = useCallback((e, menuWidth, menuHeight, onOpen) => {
+    const shell = rootRef.current?.querySelector('.te-editor-shell');
+    if (!shell) return;
+
+    const shellRect = shell.getBoundingClientRect();
+    const pad = 8;
+
+    let left = e.clientX - shellRect.left;
+    let top = e.clientY - shellRect.top;
+    left = Math.max(pad, Math.min(shellRect.width - menuWidth - pad, left));
+    top = Math.max(pad, Math.min(shellRect.height - menuHeight - pad, top));
+
+    onOpen({ top, left });
+  }, []);
 
   const handleEditorContextMenu = useCallback(
     (e) => {
@@ -587,30 +649,61 @@ export const TeemEditor = forwardRef(function TeemEditor(
       const target = e.target;
       if (!(target instanceof Element)) return;
 
+      const editor = editorRef.current;
+      if (!editor) return;
+
+      const accordionItem = getAccordionItemAtTarget(target, editor);
+      if (accordionItem) {
+        e.preventDefault();
+        e.stopPropagation();
+        clearLinkPopover();
+        closeTableMenu();
+
+        openShellContextMenu(e, 220, 160, ({ top, left }) => {
+          accordionMenuItemRef.current = accordionItem;
+          setAccordionMenu({ top, left });
+        });
+        return;
+      }
+
       const cell = target.closest('th, td');
-      if (!cell || !editorRef.current?.contains(cell)) return;
+      if (!cell || !editor.contains(cell)) return;
 
       e.preventDefault();
       e.stopPropagation();
       clearLinkPopover();
+      closeAccordionMenu();
 
-      const shell = rootRef.current?.querySelector('.te-editor-shell');
-      if (!shell) return;
-
-      const shellRect = shell.getBoundingClientRect();
-      const pad = 8;
-      const menuWidth = 220;
-      const menuHeight = 320;
-
-      let left = e.clientX - shellRect.left;
-      let top = e.clientY - shellRect.top;
-      left = Math.max(pad, Math.min(shellRect.width - menuWidth - pad, left));
-      top = Math.max(pad, Math.min(shellRect.height - menuHeight - pad, top));
-
-      tableMenuCellRef.current = cell;
-      setTableMenu({ top, left });
+      openShellContextMenu(e, 220, 320, ({ top, left }) => {
+        tableMenuCellRef.current = cell;
+        setTableMenu({ top, left });
+      });
     },
-    [sourceMode, disabled, clearLinkPopover]
+    [
+      sourceMode,
+      disabled,
+      clearLinkPopover,
+      closeAccordionMenu,
+      closeTableMenu,
+      openShellContextMenu,
+    ]
+  );
+
+  const handleAccordionMenuAction = useCallback(
+    (action) => {
+      const item = accordionMenuItemRef.current;
+      if (!item || !editorRef.current?.contains(item)) {
+        closeAccordionMenu();
+        return;
+      }
+      if (accordionCommand(editorRef.current, action, item)) {
+        repairAccordionStructure(editorRef.current);
+        emitChange(readHtml(), { recordHistory: true });
+        refreshStates();
+      }
+      closeAccordionMenu();
+    },
+    [closeAccordionMenu, emitChange, readHtml, refreshStates]
   );
 
   const handleTableMenuAction = useCallback(
@@ -955,6 +1048,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
           style={{ minHeight, display: sourceMode ? 'none' : undefined }}
           dir={resolvedDir}
           onInput={handleInput}
+          onBeforeInput={handleBeforeInput}
           onPaste={handlePaste}
           onKeyDown={handleKeyDown}
           onMouseDown={handleEditorMouseDown}
@@ -997,6 +1091,16 @@ export const TeemEditor = forwardRef(function TeemEditor(
             t={t}
             onAction={handleTableMenuAction}
             onClose={closeTableMenu}
+          />
+        ) : null}
+
+        {accordionMenu && !sourceMode ? (
+          <AccordionContextMenu
+            top={accordionMenu.top}
+            left={accordionMenu.left}
+            t={t}
+            onAction={handleAccordionMenuAction}
+            onClose={closeAccordionMenu}
           />
         ) : null}
 

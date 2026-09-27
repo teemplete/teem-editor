@@ -81,6 +81,9 @@ export declare function createHistory(limit?: number): {
 };
 
 export declare function getMessages(language?: string): Record<string, any>;
+export declare function getAccordionTitleOptions(
+  t: Record<string, any>
+): { value: string; label: string }[];
 export declare function getDefaultDir(language?: string): 'rtl' | 'ltr';
 export declare function resolveLanguage(language?: string): 'en' | 'fa' | 'ar';
 

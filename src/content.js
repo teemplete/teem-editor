@@ -1,8 +1,8 @@
 const CONTENT_SELECTOR =
-  'img, .te-figure, video, iframe, table, hr, blockquote, ul li, ol li, pre, code';
+  'img, .te-figure, .te-accordion, video, iframe, table, hr, blockquote, ul li, ol li, pre, code';
 
 const CONTENT_HTML_RE =
-  /<(?:img|video|iframe|table|hr)\b|te-figure\b|<blockquote\b|<(?:ul|ol)\b|<pre\b|<code\b/i;
+  /<(?:img|video|iframe|table|hr)\b|te-figure\b|te-accordion\b|<blockquote\b|<(?:ul|ol)\b|<pre\b|<code\b/i;
 
 /**
  * True when editor HTML has no visible text and no meaningful block/media nodes.
