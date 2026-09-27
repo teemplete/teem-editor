@@ -11,5 +11,6 @@ export {
   getDefaultDir,
   resolveLanguage,
   getBlockOptions,
+  getAccordionTitleOptions,
   locales,
 } from './i18n.js';

@@ -267,6 +267,19 @@ export const Icons = {
       <path {...stroke} d="M12 5v14M5 12h14" />
     </Icon>
   ),
+  accordion: (
+    <Icon>
+      <rect {...stroke} x="4" y="4" width="16" height="16" rx="2.5" />
+      <path {...stroke} d="M5 9.5h14M5 14.5h14" />
+      <path {...stroke} d="M7 7h6M7 11.5h8M7 16.5h5" />
+    </Icon>
+  ),
+  duplicate: (
+    <Icon size={16}>
+      <rect {...stroke} x="8" y="8" width="12" height="12" rx="2" />
+      <path {...stroke} d="M4 16V6a2 2 0 012-2h10" />
+    </Icon>
+  ),
   trash: (
     <Icon size={16}>
       <path {...stroke} d="M3 6h18" />

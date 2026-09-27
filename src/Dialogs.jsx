@@ -244,6 +244,58 @@ const TABLE_MENU_ITEMS = [
   { action: 'deleteTable', labelKey: 'tableDeleteTable', icon: 'trash', danger: true },
 ];
 
+const ACCORDION_MENU_ITEMS = [
+  { action: 'addItem', labelKey: 'accordionAddItem', icon: 'plus' },
+  { action: 'duplicateItem', labelKey: 'accordionDuplicateItem', icon: 'duplicate' },
+  { action: 'deleteItem', labelKey: 'accordionDeleteItem', icon: 'trash', danger: true },
+];
+
+export function AccordionContextMenu({ top, left, t, onAction, onClose }) {
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    const onDoc = (e) => {
+      if (!menuRef.current?.contains(e.target)) onClose?.();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose?.();
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={menuRef}
+      className="te-table-menu"
+      style={{ top, left }}
+      role="menu"
+      aria-label={t.accordionMenuLabel}
+      onMouseDown={(e) => e.preventDefault()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {ACCORDION_MENU_ITEMS.map((item) => (
+        <button
+          key={item.action}
+          type="button"
+          className={`te-table-menu__item${item.danger ? ' te-table-menu__item--danger' : ''}`}
+          role="menuitem"
+          onClick={() => onAction(item.action)}
+        >
+          <span className="te-table-menu__icon" aria-hidden="true">
+            {Icons[item.icon]}
+          </span>
+          <span>{t[item.labelKey]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function TableContextMenu({ top, left, t, onAction, onClose }) {
   const menuRef = useRef(null);
 

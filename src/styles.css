@@ -635,6 +635,118 @@
   border-color: var(--te-primary);
 }
 
+.te-components {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.te-components.is-disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.te-components__trigger {
+  width: auto;
+  padding: 0 8px;
+  gap: 4px;
+  font: inherit;
+  font-family: var(--te-font);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.te-components__trigger .te-components__label {
+  line-height: 1.4;
+  font-family: inherit;
+}
+
+.te-components.is-open .te-components__trigger,
+.te-components__trigger.is-active {
+  background: var(--te-primary-soft);
+  color: var(--te-primary);
+}
+
+.te-components__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-start: 0;
+  z-index: 40;
+  min-width: 180px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--te-border);
+  border-radius: 10px;
+  box-shadow: var(--te-shadow);
+}
+
+.te-components__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-family: var(--te-font);
+  font-size: 14px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.te-components__item:hover,
+.te-components__item:focus {
+  background: var(--te-primary-soft);
+  outline: none;
+}
+
+.te-editor .te-accordion {
+  margin: 0.75em 0;
+  border: 1px solid #c7d2fe;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.te-editor .te-accordion__item + .te-accordion__item {
+  border-top: 1px solid var(--te-border);
+}
+
+.te-editor .te-accordion__title {
+  position: relative;
+  margin: 0;
+  padding-block: 14px 6px;
+  padding-inline: 16px 40px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.te-editor .te-accordion__title::after {
+  content: '';
+  position: absolute;
+  inset-inline-end: 18px;
+  top: 18px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--te-muted);
+  border-bottom: 2px solid var(--te-muted);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.te-editor .te-accordion__panel {
+  padding-inline: 16px 40px;
+  padding-bottom: 14px;
+}
+
+.te-editor .te-accordion__panel > :last-child {
+  margin-bottom: 0;
+}
+
 .te-table-picker__size {
   margin-top: 8px;
   text-align: center;
