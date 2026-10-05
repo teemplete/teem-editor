@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify';
+import { repairCodeBlocksInRoot } from './paste.js';
 
 const ALLOWED_TAGS = [
   'p',
@@ -174,6 +175,8 @@ function sanitizeStyles(styleValue) {
       const value = part.slice(colon + 1).trim();
       if (!allowed.has(prop)) return null;
       if (/expression|url\s*\(|javascript|import/i.test(value)) return null;
+      if (prop === 'vertical-align') return null;
+      if (/^margin/i.test(prop) && /\dpt\b/i.test(value)) return null;
       return `${prop}: ${value}`;
     })
     .filter(Boolean)
@@ -326,6 +329,7 @@ export function sanitizeHtml(dirty) {
 
   normalizeTables(wrapper);
   normalizeAccordions(wrapper);
+  repairCodeBlocksInRoot(wrapper);
 
   flattenStyleSpans(wrapper);
 
