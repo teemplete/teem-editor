@@ -1372,14 +1372,36 @@ function blockHasContent(el) {
   return !!el.querySelector('img, table, hr, ul, ol');
 }
 
-function placeAccordion(editor, root) {
+function isEmptyParagraph(el) {
+  if (!el || el.tagName !== 'P') return false;
+  const text = (el.textContent || '').replace(/\u200b/g, '').trim();
+  if (text) return false;
+  return !el.querySelector('img, table, hr, ul, ol');
+}
+
+/** One empty paragraph after block nodes so the caret can sit below tables, images, etc. */
+function ensureTrailingParagraph(node) {
+  let next = node.nextElementSibling;
+  while (next && isEmptyParagraph(next)) {
+    const duplicate = next.nextElementSibling;
+    if (duplicate && isEmptyParagraph(duplicate)) {
+      duplicate.remove();
+      continue;
+    }
+    return next;
+  }
+  if (!next) {
+    const trail = document.createElement('p');
+    trail.innerHTML = '<br>';
+    node.after(trail);
+    return trail;
+  }
+  return null;
+}
+
+function placeBlockAtSelection(editor, root) {
   const range = getSelectedRange(editor);
   const anchor = range ? elementFromRange(range) : null;
-  const host = anchor?.closest?.('.te-accordion');
-  if (host && editor.contains(host)) {
-    host.after(root);
-    return;
-  }
 
   const block = topLevelBlock(editor, anchor);
   const canSplit =
@@ -1410,6 +1432,18 @@ function placeAccordion(editor, root) {
   }
 
   if (!keepBefore) block.remove();
+}
+
+function placeAccordion(editor, root) {
+  const range = getSelectedRange(editor);
+  const anchor = range ? elementFromRange(range) : null;
+  const host = anchor?.closest?.('.te-accordion');
+  if (host && editor.contains(host)) {
+    host.after(root);
+    return;
+  }
+
+  placeBlockAtSelection(editor, root);
 }
 
 export function insertAccordion(editor, messages) {
@@ -1810,11 +1844,14 @@ export function insertTable(editor, rows = 3, cols = 3) {
   }
 
   table.appendChild(tbody);
-  insertNode(editor, table);
+  placeBlockAtSelection(editor, table);
 
-  const p = document.createElement('p');
-  p.innerHTML = '<br>';
-  insertNode(editor, p);
+  const trail = ensureTrailingParagraph(table);
+  if (trail) placeCaret(trail, true);
+  else {
+    const cell = table.querySelector('th, td');
+    if (cell) focusCaretInCell(cell);
+  }
 }
 
 export function insertImage(editor, src, alt = '', linkOptions = null, messages) {

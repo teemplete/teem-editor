@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Icons } from './icons.jsx';
 
 export function Modal({ open, title, onClose, children, footer, closeLabel = 'Close' }) {
@@ -26,7 +27,7 @@ export function Modal({ open, title, onClose, children, footer, closeLabel = 'Cl
 
   if (!open) return null;
 
-  return (
+  const modal = (
     <div className="te-modal-backdrop" role="presentation" onMouseDown={onClose}>
       <div
         className="te-modal"
@@ -52,6 +53,8 @@ export function Modal({ open, title, onClose, children, footer, closeLabel = 'Cl
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modal, document.body) : null;
 }
 
 export function CtaDialog({
@@ -78,8 +81,7 @@ export function CtaDialog({
     }
   }, [open, initialUrl, initialText, initialClasses]);
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
+  const confirm = () => {
     const trimmedUrl = url.trim();
     const trimmedText = text.trim();
     if (!trimmedUrl) {
@@ -98,6 +100,11 @@ export function CtaDialog({
     }
   };
 
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    confirm();
+  };
+
   return (
     <Modal
       open={open}
@@ -109,13 +116,13 @@ export function CtaDialog({
           <button type="button" className="te-btn te-btn--ghost" onClick={onClose}>
             {t.cancel}
           </button>
-          <button type="submit" form="te-cta-form" className="te-btn te-btn--primary">
+          <button type="button" className="te-btn te-btn--primary" onClick={confirm}>
             {isEdit ? t.save : t.ctaSubmit}
           </button>
         </>
       }
     >
-      <form id="te-cta-form" onSubmit={handleSubmit} className="te-form">
+      <form onSubmit={handleSubmit} className="te-form">
         <label className="te-field">
           <span>{t.ctaUrl}</span>
           <input
@@ -175,8 +182,7 @@ export function LinkDialog({
     }
   }, [open, initialUrl, initialText]);
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
+  const confirm = () => {
     const trimmed = url.trim();
     if (!trimmed) {
       setError(t.linkUrlRequired);
@@ -190,6 +196,11 @@ export function LinkDialog({
     }
   };
 
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    confirm();
+  };
+
   return (
     <Modal
       open={open}
@@ -201,13 +212,13 @@ export function LinkDialog({
           <button type="button" className="te-btn te-btn--ghost" onClick={onClose}>
             {t.cancel}
           </button>
-          <button type="submit" form="te-link-form" className="te-btn te-btn--primary">
+          <button type="button" className="te-btn te-btn--primary" onClick={confirm}>
             {isEdit ? t.save : t.linkSubmit}
           </button>
         </>
       }
     >
-      <form id="te-link-form" onSubmit={handleSubmit} className="te-form">
+      <form onSubmit={handleSubmit} className="te-form">
         <label className="te-field">
           <span>{t.linkUrl}</span>
           <input
@@ -463,8 +474,7 @@ export function ImageDialog({
     return { mode: 'file', href: '' };
   };
 
-  const handleUrl = async (e) => {
-    e.preventDefault();
+  const confirmUrl = async () => {
     setError('');
     setBusy(true);
     try {
@@ -478,8 +488,7 @@ export function ImageDialog({
     }
   };
 
-  const handleFile = async (e) => {
-    e.preventDefault();
+  const confirmFile = async () => {
     const file = fileRef.current?.files?.[0];
     if (!file) {
       setError(t.imagePickFile);
@@ -498,6 +507,16 @@ export function ImageDialog({
     }
   };
 
+  const handleUrl = async (e) => {
+    e.preventDefault();
+    await confirmUrl();
+  };
+
+  const handleFile = async (e) => {
+    e.preventDefault();
+    await confirmFile();
+  };
+
   return (
     <Modal
       open={open}
@@ -510,10 +529,10 @@ export function ImageDialog({
             {t.cancel}
           </button>
           <button
-            type="submit"
-            form={tab === 'file' ? 'te-image-file-form' : 'te-image-url-form'}
+            type="button"
             className="te-btn te-btn--primary"
             disabled={busy}
+            onClick={() => (tab === 'file' ? confirmFile() : confirmUrl())}
           >
             {busy ? t.imageBusy : t.imageSubmit}
           </button>
@@ -542,7 +561,7 @@ export function ImageDialog({
       </div>
 
       {tab === 'file' ? (
-        <form id="te-image-file-form" onSubmit={handleFile} className="te-form">
+        <form onSubmit={handleFile} className="te-form">
           <label className="te-field">
             <span>{t.imageFile}</span>
             <input ref={fileRef} type="file" accept={accept} />
@@ -567,7 +586,7 @@ export function ImageDialog({
           {error ? <p className="te-error">{error}</p> : null}
         </form>
       ) : (
-        <form id="te-image-url-form" onSubmit={handleUrl} className="te-form">
+        <form onSubmit={handleUrl} className="te-form">
           <label className="te-field">
             <span>{t.imageUrl}</span>
             <input
@@ -624,8 +643,7 @@ export function ImageLinkDialog({
     }
   }, [open, initialMode, initialUrl]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const confirm = async () => {
     setError('');
     setBusy(true);
     try {
@@ -656,6 +674,11 @@ export function ImageLinkDialog({
     }
   };
 
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    await confirm();
+  };
+
   return (
     <Modal
       open={open}
@@ -668,17 +691,17 @@ export function ImageLinkDialog({
             {t.cancel}
           </button>
           <button
-            type="submit"
-            form="te-image-link-form"
+            type="button"
             className="te-btn te-btn--primary"
             disabled={busy}
+            onClick={() => confirm()}
           >
             {busy ? t.imageBusy : t.save}
           </button>
         </>
       }
     >
-      <form id="te-image-link-form" onSubmit={handleSubmit} className="te-form">
+      <form onSubmit={handleSubmit} className="te-form">
         <ImageLinkFields
           t={t}
           mode={mode}
@@ -699,10 +722,14 @@ export function ImageAltDialog({ open, onClose, onSubmit, initialAlt = '', t }) 
     if (open) setAlt(initialAlt);
   }, [open, initialAlt]);
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
+  const confirm = () => {
     onSubmit({ alt: alt.trim() });
     onClose();
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    confirm();
   };
 
   return (
@@ -716,13 +743,13 @@ export function ImageAltDialog({ open, onClose, onSubmit, initialAlt = '', t }) 
           <button type="button" className="te-btn te-btn--ghost" onClick={onClose}>
             {t.cancel}
           </button>
-          <button type="submit" form="te-image-alt-form" className="te-btn te-btn--primary">
+          <button type="button" className="te-btn te-btn--primary" onClick={confirm}>
             {t.save}
           </button>
         </>
       }
     >
-      <form id="te-image-alt-form" onSubmit={handleSubmit} className="te-form">
+      <form onSubmit={handleSubmit} className="te-form">
         <label className="te-field">
           <span>{t.altLabel}</span>
           <input
@@ -749,8 +776,7 @@ export function MarkdownDialog({ open, onClose, onSubmit, t }) {
     }
   }, [open]);
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
+  const confirm = () => {
     const trimmed = markdown.trim();
     if (!trimmed) {
       setError(t.markdownEmpty);
@@ -764,6 +790,11 @@ export function MarkdownDialog({ open, onClose, onSubmit, t }) {
     }
   };
 
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    confirm();
+  };
+
   return (
     <Modal
       open={open}
@@ -775,13 +806,13 @@ export function MarkdownDialog({ open, onClose, onSubmit, t }) {
           <button type="button" className="te-btn te-btn--ghost" onClick={onClose}>
             {t.cancel}
           </button>
-          <button type="submit" form="te-markdown-form" className="te-btn te-btn--primary">
+          <button type="button" className="te-btn te-btn--primary" onClick={confirm}>
             {t.markdownSubmit}
           </button>
         </>
       }
     >
-      <form id="te-markdown-form" onSubmit={handleSubmit} className="te-form">
+      <form onSubmit={handleSubmit} className="te-form">
         <label className="te-field">
           <span>{t.markdownLabel}</span>
           <textarea

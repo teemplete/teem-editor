@@ -19,6 +19,14 @@ import {
   AccordionContextMenu,
 } from './Dialogs.jsx';
 import { sanitizeHtml } from './sanitize.js';
+import {
+  clipboardPlainForCode,
+  flattenCodeBlocks,
+  flattenCodeElement,
+  getEditingCodeElement,
+  preparePastedHtml,
+} from './paste.js';
+import { formatHtml } from './formatHtml.js';
 import { processImageUpload } from './upload.js';
 import { createHistory } from './history.js';
 import { getMessages, getDefaultDir, resolveLanguage } from './i18n.js';
@@ -375,16 +383,25 @@ export const TeemEditor = forwardRef(function TeemEditor(
   const handlePaste = useCallback(
     (e) => {
       e.preventDefault();
-      const text = e.clipboardData?.getData('text/plain') || '';
-      const html = e.clipboardData?.getData('text/html');
-      if (html) {
-        const clean = sanitizeHtml(html);
-        document.execCommand('insertHTML', false, clean);
+      const editor = editorRef.current;
+      const codeEl = getEditingCodeElement(editor);
+      if (codeEl) {
+        const plain = clipboardPlainForCode(e.clipboardData);
+        document.execCommand('insertText', false, plain);
+        flattenCodeElement(codeEl);
       } else {
-        document.execCommand('insertText', false, text);
+        const text = e.clipboardData?.getData('text/plain') || '';
+        const html = e.clipboardData?.getData('text/html');
+        if (html) {
+          const clean = sanitizeHtml(preparePastedHtml(html));
+          document.execCommand('insertHTML', false, clean);
+          flattenCodeBlocks(editor);
+        } else {
+          document.execCommand('insertText', false, text);
+        }
       }
-      if (editorRef.current?.querySelector('.te-accordion__item')) {
-        repairAccordionStructure(editorRef.current);
+      if (editor?.querySelector('.te-accordion__item')) {
+        repairAccordionStructure(editor);
       }
       emitChange(readHtml());
     },
@@ -906,7 +923,8 @@ export const TeemEditor = forwardRef(function TeemEditor(
       if (!html) return;
 
       if (sourceMode) {
-        const next = sourceCode.trim() ? `${sourceCode}\n${html}` : html;
+        const merged = sourceCode.trim() ? `${sourceCode}\n${html}` : html;
+        const next = formatHtml(sanitizeHtml(merged));
         setSourceCode(next);
         lastHtmlRef.current = sanitizeHtml(normalizeEmpty(next));
         onChange?.(lastHtmlRef.current);
@@ -929,7 +947,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
       clearImageSelection(editorRef.current);
       selectedImageRef.current = null;
       const html = sanitizeHtml(stripSelectionClasses(readHtml()));
-      setSourceCode(html);
+      setSourceCode(formatHtml(html));
       setSourceMode(true);
       return;
     }
