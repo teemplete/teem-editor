@@ -1,16 +1,21 @@
 import { isEditorContentEmpty } from './content.js';
-import { isSafeHref, isSafeImageSrc, flattenStyleSpans } from './sanitize.js';
+import { isSafeHref, isSafeImageSrc, flattenStyleSpans, sanitizeHtml } from './sanitize.js';
 
 export function focusEditor(editor) {
   if (!editor) return;
   editor.focus({ preventScroll: true });
 }
 
+function nodeInEditor(editor, node) {
+  if (!editor || !node) return false;
+  return node === editor || editor.contains(node);
+}
+
 export function saveSelection(editor) {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return null;
   const range = sel.getRangeAt(0);
-  if (!editor.contains(range.commonAncestorContainer)) return null;
+  if (!nodeInEditor(editor, range.commonAncestorContainer)) return null;
   return range.cloneRange();
 }
 
@@ -25,6 +30,18 @@ export function restoreSelection(range) {
   } catch {
     return false;
   }
+}
+
+/**
+ * When the toolbar steals focus, the live selection often collapses while a
+ * previously saved range still holds the user's highlight (e.g. after double-click).
+ * Prefer the non-collapsed saved range over a collapsed live reading.
+ */
+export function pickSelectionRange(saved, live) {
+  if (!live) return saved ?? null;
+  if (!live.collapsed) return live;
+  if (saved && !saved.collapsed) return saved;
+  return live;
 }
 
 function exec(command, value = null) {
@@ -67,9 +84,9 @@ function ensureCssStyled() {
 
 function getSelectedRange(editor) {
   const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return null;
+  if (!sel || sel.rangeCount === 0 || !editor) return null;
   const range = sel.getRangeAt(0);
-  if (!editor.contains(range.commonAncestorContainer)) return null;
+  if (!nodeInEditor(editor, range.commonAncestorContainer)) return null;
   return range;
 }
 
@@ -243,6 +260,134 @@ export function removeLinkAt(editor, anchor) {
   return exec('unlink');
 }
 
+const INLINE_BLOCK_SELECTOR = 'p,h1,h2,h3,h4,h5,h6,li,blockquote,pre,td,th,div';
+
+function isInlineStyleBlock(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+  if (node.matches?.('figure,.te-figure') || node.closest?.('.te-figure')) return false;
+  if (node.classList?.contains('te-editor')) return false;
+  if (node.matches?.('p,h1,h2,h3,h4,h5,h6,li,blockquote,pre,td,th')) return true;
+  return node.tagName === 'DIV';
+}
+
+function setEndAtNodeEnd(range, node) {
+  if (!node) return;
+  if (node.nodeType === Node.TEXT_NODE) {
+    range.setEnd(node, node.length);
+    return;
+  }
+  const inner = node.ownerDocument.createRange();
+  inner.selectNodeContents(node);
+  range.setEnd(inner.endContainer, inner.endOffset);
+}
+
+function setStartAtNodeStart(range, node) {
+  if (!node) return;
+  if (node.nodeType === Node.TEXT_NODE) {
+    range.setStart(node, 0);
+    return;
+  }
+  const inner = node.ownerDocument.createRange();
+  inner.selectNodeContents(node);
+  range.setStart(inner.startContainer, inner.startOffset);
+}
+
+/**
+ * Browser paragraph selection (double-click on some platforms, triple-click in
+ * Chrome) ends at the next block's offset 0. extractContents then lifts the
+ * <p> into an inline span, so background/color never paints on the text.
+ * Pull those boundary points back inside the blocks that are actually selected.
+ */
+function normalizeInlineRange(range) {
+  if (!range || range.collapsed) return range;
+  const next = range.cloneRange();
+
+  let guard = 0;
+  while (guard < 12 && !next.collapsed) {
+    guard += 1;
+    const signature = `${next.endContainer.nodeType}:${next.endOffset}:${next.endContainer.textContent?.length || 0}`;
+    const end = next.endContainer;
+
+    if (end.nodeType === Node.TEXT_NODE && next.endOffset === 0) {
+      const prev = end.previousSibling;
+      if (prev) {
+        setEndAtNodeEnd(next, prev);
+      } else if (isInlineStyleBlock(end.parentNode) && end.parentNode.previousSibling) {
+        setEndAtNodeEnd(next, end.parentNode.previousSibling);
+      } else {
+        break;
+      }
+    } else if (end.nodeType === Node.ELEMENT_NODE && next.endOffset === 0) {
+      const prev = end.previousSibling;
+      if (!prev) break;
+      setEndAtNodeEnd(next, prev);
+    } else if (
+      end.nodeType === Node.ELEMENT_NODE &&
+      next.startContainer === end &&
+      next.endOffset > next.startOffset
+    ) {
+      const selected = [...end.childNodes].slice(next.startOffset, next.endOffset);
+      const meaningful = selected.filter(
+        (node) => node.nodeType === Node.ELEMENT_NODE || (node.textContent || '').trim()
+      );
+      if (!meaningful.length || !meaningful.every((node) => isInlineStyleBlock(node))) break;
+      setStartAtNodeStart(next, meaningful[0]);
+      setEndAtNodeEnd(next, meaningful[meaningful.length - 1]);
+    } else {
+      break;
+    }
+
+    const after = `${next.endContainer.nodeType}:${next.endOffset}:${next.endContainer.textContent?.length || 0}`;
+    if (after === signature) break;
+  }
+
+  return next;
+}
+
+function leafBlocksIntersecting(editor, range) {
+  if (!editor || !range || range.collapsed) return [];
+  const found = [];
+  editor.querySelectorAll(INLINE_BLOCK_SELECTOR).forEach((block) => {
+    if (!isInlineStyleBlock(block) || !editor.contains(block)) return;
+    try {
+      const contents = block.ownerDocument.createRange();
+      contents.selectNodeContents(block);
+      // END_TO_START compares range.start to contents.end.
+      // START_TO_END compares range.end to contents.start.
+      const startsBeforeContentsEnd =
+        range.compareBoundaryPoints(Range.END_TO_START, contents) < 0;
+      const endsAfterContentsStart =
+        range.compareBoundaryPoints(Range.START_TO_END, contents) > 0;
+      if (startsBeforeContentsEnd && endsAfterContentsStart) found.push(block);
+    } catch {
+      // Detached or cross-document ranges are ignored.
+    }
+  });
+  return found.filter((block) => !found.some((other) => other !== block && block.contains(other)));
+}
+
+function intersectRangeWithBlock(range, block) {
+  const contents = block.ownerDocument.createRange();
+  contents.selectNodeContents(block);
+  const sub = range.cloneRange();
+  if (sub.compareBoundaryPoints(Range.START_TO_START, contents) < 0) {
+    sub.setStart(contents.startContainer, contents.startOffset);
+  }
+  if (sub.compareBoundaryPoints(Range.END_TO_END, contents) > 0) {
+    sub.setEnd(contents.endContainer, contents.endOffset);
+  }
+  if (sub.collapsed || !block.contains(sub.commonAncestorContainer)) return null;
+  return sub;
+}
+
+function prepareInlineRange(editor) {
+  const range = getSelectedRange(editor);
+  if (!range || range.collapsed) return range;
+  const normalized = normalizeInlineRange(range);
+  if (normalized && !normalized.collapsed) restoreSelection(normalized);
+  return getSelectedRange(editor);
+}
+
 /**
  * Apply inline style via <span style="...">.
  * Avoids <font color> from execCommand('foreColor'), which sanitizer strips.
@@ -271,6 +416,25 @@ function applyInlineStyle(editor, styles) {
       restoreSelection(caret);
       return true;
     }
+  }
+
+  range = prepareInlineRange(editor) || range;
+
+  const blocks = leafBlocksIntersecting(editor, range);
+  if (blocks.length > 1) {
+    const snapshot = range.cloneRange();
+    const subs = blocks
+      .map((block) => intersectRangeWithBlock(snapshot, block))
+      .filter(Boolean);
+    let applied = false;
+    for (let i = subs.length - 1; i >= 0; i -= 1) {
+      restoreSelection(subs[i]);
+      if (updateExistingInlineStyle(subs[i], styles) || wrapSelectionWithSpan(editor, styles)) {
+        applied = true;
+      }
+    }
+    flattenStyleSpans(editor);
+    return applied;
   }
 
   const updated = updateExistingInlineStyle(range, styles);
@@ -420,6 +584,7 @@ function clearHighlight(editor) {
 export function applyFormat(editor, type, value, options = {}) {
   focusEditor(editor);
   ensureCssStyled();
+  prepareInlineRange(editor);
 
   switch (type) {
     case 'bold':
@@ -482,6 +647,11 @@ export function applyFormat(editor, type, value, options = {}) {
       break;
     case 'removeFormat':
       exec('removeFormat');
+      break;
+    case 'setImageWidth':
+      if (options.selectedImage && editor.contains(options.selectedImage)) {
+        setImageWidth(options.selectedImage, value);
+      }
       break;
     default:
       break;
@@ -663,11 +833,86 @@ function ensureFigure(img) {
 
   const figure = document.createElement('div');
   figure.className = 'te-figure';
-  figure.setAttribute('contenteditable', 'false');
   const wrapTarget = getImageLinkAnchor(img) || img;
   wrapTarget.replaceWith(figure);
   figure.appendChild(wrapTarget);
   return figure;
+}
+
+function parsePercentWidth(value) {
+  if (!value || typeof value !== 'string') return null;
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)%$/);
+  return match ? `${match[1]}%` : null;
+}
+
+function getEditorContentWidth(editor) {
+  if (!editor) return 0;
+  const cs = getComputedStyle(editor);
+  const paddingInline =
+    (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+  return Math.max(0, editor.clientWidth - paddingInline);
+}
+
+function getFigureChromeWidth(figure) {
+  if (!figure) return 0;
+  const cs = getComputedStyle(figure);
+  return (
+    (parseFloat(cs.paddingLeft) || 0) +
+    (parseFloat(cs.paddingRight) || 0) +
+    (parseFloat(cs.borderLeftWidth) || 0) +
+    (parseFloat(cs.borderRightWidth) || 0)
+  );
+}
+
+export function getMaxImagePixelWidth(editor, figure) {
+  const contentWidth = getEditorContentWidth(editor);
+  const chrome = getFigureChromeWidth(figure);
+  return Math.max(48, contentWidth - chrome);
+}
+
+export function getImageWidthState(img) {
+  if (!img) return null;
+  const figure = img.closest?.('.te-figure');
+  const fromData = parsePercentWidth(figure?.getAttribute('data-image-width') || '');
+  if (fromData) return fromData;
+  const fromStyle = parsePercentWidth(img.style.width || '');
+  if (fromStyle) return fromStyle;
+  if (img.style.width === '100%' || img.getAttribute('width') === '100%') return '100%';
+  const px =
+    parseInt(img.style.width || '', 10) ||
+    parseInt(img.getAttribute('width') || '', 10);
+  if (px > 0) return 'custom';
+  return null;
+}
+
+export function setImageWidth(img, spec) {
+  if (!img) return;
+  const figure = ensureFigure(img);
+  img.style.maxWidth = '100%';
+  img.style.display = 'block';
+  img.style.float = 'none';
+
+  const percent = typeof spec === 'string' ? parsePercentWidth(spec) : null;
+  if (percent) {
+    figure.setAttribute('data-image-width', percent);
+    figure.style.width = percent;
+    figure.style.maxWidth = '100%';
+    img.style.width = '100%';
+    img.style.height = 'auto';
+    img.removeAttribute('width');
+    img.removeAttribute('height');
+    return;
+  }
+
+  figure.removeAttribute('data-image-width');
+  figure.style.width = 'fit-content';
+  figure.style.maxWidth = '100%';
+
+  const width = typeof spec === 'number' ? spec : parseInt(spec, 10);
+  if (width > 0) {
+    const ratio = getImageAspectRatio(img, width);
+    commitImageSize(img, width, Math.round(width * ratio));
+  }
 }
 
 function getImageAspectRatio(img, fallbackWidth) {
@@ -719,9 +964,10 @@ export function whenImageReady(img) {
 
 export function alignImage(img, align) {
   const figure = ensureFigure(img);
+  const percentWidth = parsePercentWidth(figure.getAttribute('data-image-width') || '');
   figure.setAttribute('data-align', align);
   figure.style.textAlign = align;
-  figure.style.width = 'fit-content';
+  figure.style.width = percentWidth || 'fit-content';
   figure.style.maxWidth = '100%';
 
   img.style.display = 'block';
@@ -811,7 +1057,7 @@ export function startImageResize(img, startEvent, { editor, onComplete } = {}) {
   const attrWidth = parseInt(img.getAttribute('width') || '', 10);
   const startWidth = rectWidth > 0 ? rectWidth : attrWidth > 0 ? attrWidth : 200;
   const ratio = getImageAspectRatio(img, startWidth);
-  const maxWidth = Math.max(48, editor.clientWidth - 16);
+  const maxWidth = getMaxImagePixelWidth(editor, figure);
   const editorDir = getComputedStyle(editor).direction;
   let lastWidth = startWidth;
   let lastHeight = Math.round(startWidth * ratio);
@@ -835,7 +1081,11 @@ export function startImageResize(img, startEvent, { editor, onComplete } = {}) {
     document.removeEventListener('pointercancel', onUp);
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
-    commitImageSize(img, lastWidth, lastHeight);
+    if (lastWidth >= maxWidth - 2) {
+      setImageWidth(img, '100%');
+    } else {
+      commitImageSize(img, lastWidth, lastHeight);
+    }
     onComplete?.();
   };
 
@@ -868,6 +1118,33 @@ export function clearImageSelection(editor) {
   );
 }
 
+function placeCaretAtEditorEnd(editor) {
+  focusEditor(editor);
+  const sel = window.getSelection();
+  if (!sel) return;
+
+  const range = document.createRange();
+
+  if (isEditorContentEmpty(editor.innerHTML)) {
+    editor.innerHTML = '<p><br></p>';
+    const p = editor.querySelector('p');
+    range.setStart(p, 0);
+    range.collapse(true);
+  } else {
+    const last = editor.lastElementChild;
+    if (last) {
+      range.selectNodeContents(last);
+      range.collapse(false);
+    } else {
+      range.selectNodeContents(editor);
+      range.collapse(false);
+    }
+  }
+
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
 function placeCaretAfterNodeRemoval(editor, next, prev) {
   focusEditor(editor);
   const sel = window.getSelection();
@@ -881,18 +1158,283 @@ function placeCaretAfterNodeRemoval(editor, next, prev) {
   } else if (prev && editor.contains(prev)) {
     range.selectNodeContents(prev);
     range.collapse(false);
-  } else if (isEditorContentEmpty(editor.innerHTML)) {
-    editor.innerHTML = '<p><br></p>';
-    const p = editor.querySelector('p');
-    range.setStart(p, 0);
-    range.collapse(true);
   } else {
-    range.selectNodeContents(editor);
-    range.collapse(false);
+    placeCaretAtEditorEnd(editor);
+    return;
   }
 
   sel.removeAllRanges();
   sel.addRange(range);
+}
+
+function isHighlightedRangeInEditor(editor, range) {
+  if (!editor || !range || range.collapsed) return false;
+  return nodeInEditor(editor, range.commonAncestorContainer);
+}
+
+/** Insert sanitized HTML at a highlighted range, or append at the end when nothing is selected. */
+export function insertHtmlContent(editor, html, savedRange = null) {
+  if (!editor || !html) return;
+
+  if (isHighlightedRangeInEditor(editor, savedRange)) {
+    restoreSelection(savedRange);
+  } else {
+    placeCaretAtEditorEnd(editor);
+  }
+
+  exec('insertHTML', html);
+}
+
+function stripEditorUiFromRoot(root) {
+  if (!root) return;
+  root
+    .querySelectorAll(
+      '.te-figure__alt-btn, .te-figure__link-btn, .te-figure__resize-handle'
+    )
+    .forEach((el) => el.remove());
+  root.querySelectorAll('.is-selected').forEach((el) => el.classList.remove('is-selected'));
+  root.querySelectorAll('[class=""]').forEach((el) => el.removeAttribute('class'));
+}
+
+function getSelectedFigure(editor) {
+  const selected = editor?.querySelector('.te-figure.is-selected, img.is-selected');
+  if (!selected || !editor.contains(selected)) return null;
+  if (selected.classList.contains('te-figure')) return selected;
+  return selected.closest?.('.te-figure');
+}
+
+function isTextCaretBlock(el) {
+  return !!el?.matches?.('p, h1, h2, h3, h4, h5, h6, blockquote, pre, li');
+}
+
+/** True when the live selection is the figure itself, not text around it. */
+function isFigureOnlySelection(editor, figure) {
+  if (!figure || !editor?.contains(figure)) return false;
+  const range = getSelectedRange(editor);
+  if (!range) return true;
+  if (range.collapsed) {
+    return figure === range.startContainer || figure.contains(range.startContainer);
+  }
+
+  const parent = figure.parentNode;
+  if (range.startContainer === parent && range.endContainer === parent) {
+    const index = Array.prototype.indexOf.call(parent.childNodes, figure);
+    if (range.startOffset === index && range.endOffset === index + 1) return true;
+    return false;
+  }
+
+  const startsIn = figure === range.startContainer || figure.contains(range.startContainer);
+  const endsIn = figure === range.endContainer || figure.contains(range.endContainer);
+  return startsIn && endsIn;
+}
+
+function figureForCaretRedirect(editor) {
+  const selected = getSelectedFigure(editor);
+  if (selected && isFigureOnlySelection(editor, selected)) return selected;
+
+  const range = getSelectedRange(editor);
+  if (!range?.collapsed) return null;
+  let node = range.startContainer;
+  if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  const figure = node?.closest?.('.te-figure');
+  if (!figure || !editor.contains(figure)) return null;
+  return figure;
+}
+
+/** Put the caret in the paragraph before or after an image so typing can continue. */
+export function moveCaretBesideFigure(editor, figure, where = 'after') {
+  if (!editor || !figure || !editor.contains(figure)) return false;
+  clearImageSelection(editor);
+
+  let target = where === 'before' ? figure.previousElementSibling : figure.nextElementSibling;
+  if (!isTextCaretBlock(target)) {
+    const paragraph = document.createElement('p');
+    paragraph.innerHTML = '<br>';
+    if (where === 'before') figure.before(paragraph);
+    else figure.after(paragraph);
+    target = paragraph;
+  }
+
+  placeCaret(target, where === 'after');
+  focusEditor(editor);
+  return true;
+}
+
+export function redirectFigureKey(editor, event) {
+  const figure = figureForCaretRedirect(editor);
+  if (!figure || event.metaKey || event.ctrlKey || event.altKey) return false;
+
+  if (event.key === 'Enter' || event.key === 'ArrowDown') {
+    event.preventDefault();
+    return moveCaretBesideFigure(editor, figure, 'after');
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    return moveCaretBesideFigure(editor, figure, 'before');
+  }
+  if (event.key.length === 1) {
+    event.preventDefault();
+    if (!moveCaretBesideFigure(editor, figure, 'after')) return false;
+    document.execCommand('insertText', false, event.key);
+    return true;
+  }
+  return false;
+}
+
+export function redirectFigureBeforeInput(editor, event) {
+  const figure = figureForCaretRedirect(editor);
+  if (!figure) return false;
+  const type = event.inputType || '';
+  if (!type.startsWith('insert') && type !== 'insertParagraph' && type !== 'insertLineBreak') {
+    return false;
+  }
+  event.preventDefault();
+  if (!moveCaretBesideFigure(editor, figure, 'after')) return false;
+  if (event.data) document.execCommand('insertText', false, event.data);
+  return true;
+}
+
+function rangeToCleanHtml(range) {
+  const wrap = document.createElement('div');
+  wrap.appendChild(range.cloneContents());
+  stripEditorUiFromRoot(wrap);
+  return wrap.innerHTML;
+}
+
+function figureClipboardPayload(figure) {
+  const wrap = document.createElement('div');
+  wrap.appendChild(figure.cloneNode(true));
+  stripEditorUiFromRoot(wrap);
+  const html = sanitizeHtml(wrap.innerHTML);
+  const plain = wrap.textContent?.trim() || '';
+  if (!html.trim() && !plain) return null;
+  return { html, plain };
+}
+
+/** Build clipboard payload for the current editor selection (text, blocks, images). */
+export function getEditorClipboardPayload(editor) {
+  if (!editor) return null;
+
+  const figure = getSelectedFigure(editor);
+  const range = getSelectedRange(editor);
+  if (figure && isFigureOnlySelection(editor, figure)) {
+    return figureClipboardPayload(figure);
+  }
+
+  if (!range || range.collapsed) return null;
+
+  const html = sanitizeHtml(rangeToCleanHtml(range));
+  const plain = range.toString();
+  if (!html.trim() && !plain.trim()) return null;
+  return { html, plain };
+}
+
+function caretFromPoint(x, y) {
+  const pos = document.caretPositionFromPoint?.(x, y);
+  if (!pos?.offsetNode) return null;
+  return { node: pos.offsetNode, offset: pos.offset };
+}
+
+/**
+ * Chrome drops the caret to the editor root when a click lands on the line
+ * after an image. Rebuild the selection from the real caret coordinates.
+ */
+export function repairEditorPointerSelection(editor, event, anchor) {
+  if (!editor || !anchor?.node || event.shiftKey || event.button !== 0) return false;
+  if (!nodeInEditor(editor, anchor.node)) return false;
+  if (event.target instanceof Element && event.target.closest('.te-figure, button')) return false;
+
+  const sel = window.getSelection();
+  if (!sel) return false;
+  const anchorNode = sel.anchorNode;
+  const anchorEl =
+    anchorNode?.nodeType === Node.TEXT_NODE ? anchorNode.parentElement : anchorNode;
+  if (anchorEl && anchorEl !== editor && editor.contains(anchorEl)) return false;
+
+  const endPos = caretFromPoint(event.clientX, event.clientY);
+  if (!endPos || !nodeInEditor(editor, endPos.node)) return false;
+
+  const probe = document.createRange();
+  try {
+    probe.setStart(anchor.node, anchor.offset);
+    probe.collapse(true);
+  } catch {
+    return false;
+  }
+
+  const range = document.createRange();
+  try {
+    if (probe.comparePoint(endPos.node, endPos.offset) < 0) {
+      range.setStart(endPos.node, endPos.offset);
+      range.setEnd(anchor.node, anchor.offset);
+    } else {
+      range.setStart(anchor.node, anchor.offset);
+      range.setEnd(endPos.node, endPos.offset);
+    }
+  } catch {
+    return false;
+  }
+
+  sel.removeAllRanges();
+  sel.addRange(range);
+  focusEditor(editor);
+  return true;
+}
+
+export function selectAllEditorContent(editor) {
+  if (!editor) return;
+  clearImageSelection(editor);
+  focusEditor(editor);
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+}
+
+/** Remove the current editor selection (used after cut). */
+export function deleteEditorSelection(editor) {
+  if (!editor) return false;
+
+  const figure = getSelectedFigure(editor);
+  const range = getSelectedRange(editor);
+  if (figure && isFigureOnlySelection(editor, figure)) {
+    const next = figure.nextElementSibling;
+    const prev = figure.previousElementSibling;
+    figure.remove();
+    clearImageSelection(editor);
+    placeCaretAfterNodeRemoval(editor, next, prev);
+    return true;
+  }
+
+  if (!range || range.collapsed) return false;
+
+  range.deleteContents();
+  clearImageSelection(editor);
+  editor.querySelectorAll('.te-figure').forEach((node) => {
+    if (!node.querySelector('img')) node.remove();
+  });
+  if (isEditorContentEmpty(editor.innerHTML)) {
+    editor.innerHTML = '<p><br></p>';
+    const p = editor.querySelector('p');
+    if (p) {
+      const caret = document.createRange();
+      caret.setStart(p, 0);
+      caret.collapse(true);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(caret);
+    }
+  }
+  return true;
+}
+
+/** Cut selection and return clipboard payload, or null when nothing to cut. */
+export function cutEditorSelection(editor) {
+  const payload = getEditorClipboardPayload(editor);
+  if (!payload) return null;
+  if (!deleteEditorSelection(editor)) return null;
+  return payload;
 }
 
 export function removeSelectedImage(editor) {
@@ -1862,7 +2404,6 @@ export function insertImage(editor, src, alt = '', linkOptions = null, messages)
 
   const figure = document.createElement('div');
   figure.className = 'te-figure';
-  figure.setAttribute('contenteditable', 'false');
   figure.setAttribute('data-align', 'center');
   figure.style.textAlign = 'center';
   figure.style.width = 'fit-content';
@@ -1901,7 +2442,7 @@ function insertNode(editor, node) {
   }
 
   const range = sel.getRangeAt(0);
-  if (!editor.contains(range.commonAncestorContainer)) {
+  if (!nodeInEditor(editor, range.commonAncestorContainer)) {
     editor.appendChild(node);
     return;
   }
@@ -1938,6 +2479,12 @@ export function getActiveStates(editor) {
     format: accordionTitle ? accordionTitle.tagName.toLowerCase() : getBlockFormat(),
     accordionTitle: accordionTitle ? accordionTitle.tagName.toLowerCase() : null,
     hasSelectedImage: !!selectedImage,
+    imageWidth: (() => {
+      if (!selectedImage) return null;
+      const img =
+        selectedImage.tagName === 'IMG' ? selectedImage : selectedImage.querySelector?.('img');
+      return getImageWidthState(img);
+    })(),
     link: !!getLinkAtSelection(editor) && !getCtaAtSelection(editor),
     cta: !!getCtaAtSelection(editor),
   };

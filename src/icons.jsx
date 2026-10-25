@@ -135,6 +135,12 @@ export const Icons = {
       <path {...stroke} d="M3 16l5-4 4 3 3-2 6 3" />
     </Icon>
   ),
+  imageSize: (
+    <Icon>
+      <path {...stroke} d="M4 7h6M4 12h10M4 17h14" />
+      <path {...stroke} d="M17 5v14" />
+    </Icon>
+  ),
   rtl: (
     <Icon>
       {/* q (standard pilcrow) */}

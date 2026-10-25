@@ -49,6 +49,88 @@ function Divider() {
   return <span className="te-toolbar__divider" aria-hidden="true" />;
 }
 
+const IMAGE_WIDTH_OPTIONS = [
+  { value: '25%', labelKey: 'imageSizeSmall' },
+  { value: '50%', labelKey: 'imageSizeMedium' },
+  { value: '75%', labelKey: 'imageSizeLarge' },
+  { value: '100%', labelKey: 'imageSizeFull' },
+];
+
+function ImageSizeMenu({ t, disabled, activeWidth, onCommand, onRememberSelection }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    if (!open || disabled) {
+      if (disabled) setOpen(false);
+      return undefined;
+    }
+
+    const onDoc = (e) => {
+      if (!rootRef.current?.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, disabled]);
+
+  return (
+    <div
+      className={`te-components te-image-size${open ? ' is-open' : ''}${disabled ? ' is-disabled' : ''}`}
+      ref={rootRef}
+    >
+      <button
+        type="button"
+        className={`te-tool te-components__trigger${open ? ' is-active' : ''}`}
+        title={t.imageSize}
+        aria-label={t.imageSize}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        disabled={disabled}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          if (disabled) return;
+          onRememberSelection?.();
+          setOpen((value) => !value);
+        }}
+      >
+        {Icons.imageSize}
+        <span className="te-components__label">{t.imageSize}</span>
+        {Icons.chevronDown}
+      </button>
+
+      {open && !disabled ? (
+        <div className="te-components__menu" role="menu" onMouseDown={(e) => e.preventDefault()}>
+          {IMAGE_WIDTH_OPTIONS.map(({ value, labelKey }) => (
+            <button
+              key={value}
+              type="button"
+              className={`te-components__item${activeWidth === value ? ' is-active' : ''}`}
+              role="menuitem"
+              aria-current={activeWidth === value ? 'true' : undefined}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                onRememberSelection?.();
+                onCommand?.('setImageWidth', value);
+                setOpen(false);
+              }}
+            >
+              <span>{t[labelKey]}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ComponentsMenu({ label, itemLabel, disabled, onInsert, onRememberSelection }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
@@ -653,6 +735,17 @@ export function Toolbar({
         <ToolButton label={t.insertImage} disabled={formattingDisabled} onClick={onOpenImage}>
           {Icons.image}
         </ToolButton>
+        {states.hasSelectedImage ? (
+          <ImageSizeMenu
+            t={t}
+            disabled={formattingDisabled}
+            activeWidth={
+              states.imageWidth && states.imageWidth !== 'custom' ? states.imageWidth : null
+            }
+            onCommand={onCommand}
+            onRememberSelection={onRememberSelection}
+          />
+        ) : null}
         <TablePickerButton
           label={t.insertTable}
           disabled={formattingDisabled}

@@ -45,12 +45,21 @@ import {
   getRangeText,
   insertImage,
   insertLink,
+  insertHtmlContent,
+  getEditorClipboardPayload,
+  cutEditorSelection,
+  selectAllEditorContent,
+  moveCaretBesideFigure,
+  repairEditorPointerSelection,
+  redirectFigureKey,
+  redirectFigureBeforeInput,
   insertCta,
   removeLinkAt,
   updateLink,
   updateCta,
   restoreSelection,
   saveSelection,
+  pickSelectionRange,
   setDirection,
   selectImage,
   clearImageSelection,
@@ -139,6 +148,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
   const editorRef = useRef(null);
   const historyRef = useRef(createHistory());
   const savedRangeRef = useRef(null);
+  const pointerAnchorRef = useRef(null);
   const lastHtmlRef = useRef('');
   const composingRef = useRef(false);
   const selectedImageRef = useRef(null);
@@ -281,6 +291,10 @@ export const TeemEditor = forwardRef(function TeemEditor(
       if (!sel || sel.rangeCount === 0) return;
       if (editorRef.current.contains(sel.anchorNode)) {
         clampAccordionSelection(editorRef.current);
+        const range = sel.getRangeAt(0);
+        if (editorRef.current.contains(range.commonAncestorContainer)) {
+          savedRangeRef.current = range.cloneRange();
+        }
         refreshStates();
       }
     };
@@ -290,13 +304,15 @@ export const TeemEditor = forwardRef(function TeemEditor(
 
   const rememberSelection = useCallback(() => {
     const live = saveSelection(editorRef.current);
-    if (live) savedRangeRef.current = live;
+    const next = pickSelectionRange(savedRangeRef.current, live);
+    if (next) savedRangeRef.current = next.cloneRange();
   }, []);
 
   const withSelection = useCallback(
     (fn) => {
       const live = saveSelection(editorRef.current);
-      if (live) savedRangeRef.current = live;
+      const next = pickSelectionRange(savedRangeRef.current, live);
+      if (next) savedRangeRef.current = next.cloneRange();
       restoreSelection(savedRangeRef.current);
       fn();
       emitChange(readHtml());
@@ -372,6 +388,12 @@ export const TeemEditor = forwardRef(function TeemEditor(
   const handleBeforeInput = useCallback(
     (e) => {
       if (composingRef.current || sourceMode || disabled) return;
+      if (redirectFigureBeforeInput(editorRef.current, e)) {
+        selectedImageRef.current = null;
+        emitChange(readHtml());
+        refreshStates();
+        return;
+      }
       if (!handleAccordionBeforeInput(editorRef.current, e)) return;
       repairAccordionStructure(editorRef.current);
       emitChange(readHtml());
@@ -380,10 +402,52 @@ export const TeemEditor = forwardRef(function TeemEditor(
     [disabled, emitChange, readHtml, refreshStates, sourceMode]
   );
 
+  const writeClipboardPayload = useCallback((clipboardData, payload) => {
+    if (!clipboardData || !payload) return;
+    clipboardData.setData('text/plain', payload.plain);
+    if (payload.html) clipboardData.setData('text/html', payload.html);
+  }, []);
+
+  const handleCopy = useCallback(
+    (e) => {
+      if (sourceMode || disabled || composingRef.current) return;
+      const editor = editorRef.current;
+      const payload = getEditorClipboardPayload(editor);
+      if (!payload) return;
+      e.preventDefault();
+      writeClipboardPayload(e.clipboardData, payload);
+    },
+    [disabled, sourceMode, writeClipboardPayload]
+  );
+
+  const handleCut = useCallback(
+    (e) => {
+      if (sourceMode || disabled || composingRef.current) return;
+      const editor = editorRef.current;
+      const payload = cutEditorSelection(editor);
+      if (!payload) return;
+      e.preventDefault();
+      writeClipboardPayload(e.clipboardData, payload);
+      selectedImageRef.current = null;
+      if (editor?.querySelector('.te-accordion__item')) {
+        repairAccordionStructure(editor);
+      }
+      emitChange(readHtml());
+      refreshStates();
+    },
+    [disabled, emitChange, readHtml, refreshStates, sourceMode, writeClipboardPayload]
+  );
+
   const handlePaste = useCallback(
     (e) => {
       e.preventDefault();
       const editor = editorRef.current;
+      if (
+        editor?.querySelector('.te-figure.is-selected, img.is-selected') &&
+        removeSelectedImage(editor)
+      ) {
+        selectedImageRef.current = null;
+      }
       const codeEl = getEditingCodeElement(editor);
       if (codeEl) {
         const plain = clipboardPlainForCode(e.clipboardData);
@@ -426,6 +490,15 @@ export const TeemEditor = forwardRef(function TeemEditor(
       } else if (mod && e.key.toLowerCase() === 'i') {
         e.preventDefault();
         handleCommand('italic');
+      } else if (mod && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        selectAllEditorContent(editorRef.current);
+        selectedImageRef.current = null;
+        refreshStates();
+      } else if (redirectFigureKey(editorRef.current, e)) {
+        selectedImageRef.current = null;
+        emitChange(readHtml());
+        refreshStates();
       } else if (e.key === 'Escape' && selectedImageRef.current) {
         clearImageSelection(editorRef.current);
         selectedImageRef.current = null;
@@ -810,15 +883,13 @@ export const TeemEditor = forwardRef(function TeemEditor(
       }
 
       if (figure && editorRef.current.contains(figure)) {
-        const innerImg = figure.querySelector('img');
-        if (innerImg) {
-          e.preventDefault();
-          selectImage(innerImg, editorRef.current, messagesRef.current);
-          selectedImageRef.current = innerImg;
-          savedRangeRef.current = saveSelection(editorRef.current);
-          refreshStates();
-          return;
-        }
+        e.preventDefault();
+        moveCaretBesideFigure(editorRef.current, figure, 'after');
+        selectedImageRef.current = null;
+        savedRangeRef.current = saveSelection(editorRef.current);
+        emitChange(readHtml());
+        refreshStates();
+        return;
       }
 
       if (selectedImageRef.current) {
@@ -831,11 +902,28 @@ export const TeemEditor = forwardRef(function TeemEditor(
       if (anchor && editorRef.current.contains(anchor)) {
         e.preventDefault();
       }
+
+      if (!e.defaultPrevented) {
+        const pos = document.caretPositionFromPoint?.(e.clientX, e.clientY);
+        pointerAnchorRef.current = pos?.offsetNode
+          ? { node: pos.offsetNode, offset: pos.offset }
+          : null;
+      } else {
+        pointerAnchorRef.current = null;
+      }
     },
     [emitChange, openAltEditor, openImageLinkEditor, readHtml, refreshStates]
   );
 
   const handleEditorMouseDown = handleEditorPointerDown;
+
+  const handleEditorPointerUp = useCallback((e) => {
+    if (repairEditorPointerSelection(editorRef.current, e, pointerAnchorRef.current)) {
+      savedRangeRef.current = saveSelection(editorRef.current);
+      refreshStates();
+    }
+    pointerAnchorRef.current = null;
+  }, [refreshStates]);
 
   const handleEditorDoubleClick = useCallback(
     (e) => {
@@ -931,11 +1019,11 @@ export const TeemEditor = forwardRef(function TeemEditor(
         return;
       }
 
-      withSelection(() => {
-        document.execCommand('insertHTML', false, html);
-      });
+      insertHtmlContent(editorRef.current, html, savedRangeRef.current);
+      emitChange(readHtml());
+      refreshStates();
     },
-    [sourceMode, sourceCode, withSelection, onChange]
+    [sourceMode, sourceCode, emitChange, readHtml, refreshStates, onChange]
   );
 
   const toggleSourceMode = useCallback(() => {
@@ -1068,9 +1156,12 @@ export const TeemEditor = forwardRef(function TeemEditor(
           onInput={handleInput}
           onBeforeInput={handleBeforeInput}
           onPaste={handlePaste}
+          onCopy={handleCopy}
+          onCut={handleCut}
           onKeyDown={handleKeyDown}
           onMouseDown={handleEditorMouseDown}
           onPointerDown={handleEditorPointerDown}
+          onPointerUp={handleEditorPointerUp}
           onMouseMove={handleEditorMouseMove}
           onMouseLeave={handleEditorMouseLeave}
           onScroll={handleEditorScroll}
