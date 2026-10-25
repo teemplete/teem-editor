@@ -59,6 +59,7 @@ const ALLOWED_ATTR = [
   'size',
   'contenteditable',
   'data-align',
+  'data-image-width',
   'data-te-lightbox',
   'data-te-link-mode',
   'loading',
@@ -189,8 +190,34 @@ function parsePx(value) {
   return match ? Math.round(Number(match[1])) : 0;
 }
 
+function parsePercentWidth(value) {
+  if (!value || typeof value !== 'string') return null;
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)%$/);
+  return match ? `${match[1]}%` : null;
+}
+
 /** Keep explicit image dimensions in both style (px) and HTML attributes. */
 function normalizeImageSize(img) {
+  const figure = img.closest?.('.te-figure');
+  const percentFromData = parsePercentWidth(figure?.getAttribute('data-image-width') || '');
+  const percentFromStyle = parsePercentWidth(img.style.width || '');
+  const percentWidth = percentFromData || percentFromStyle;
+
+  if (percentWidth) {
+    if (figure) {
+      figure.setAttribute('data-image-width', percentWidth);
+      figure.style.width = percentWidth;
+      figure.style.maxWidth = '100%';
+    }
+    img.style.width = '100%';
+    img.style.height = 'auto';
+    img.removeAttribute('width');
+    img.removeAttribute('height');
+    img.style.display = 'block';
+    img.style.maxWidth = '100%';
+    return;
+  }
+
   let width = parsePx(img.style.width) || parseInt(img.getAttribute('width') || '', 10);
   let height = parsePx(img.style.height) || parseInt(img.getAttribute('height') || '', 10);
 
@@ -199,6 +226,11 @@ function normalizeImageSize(img) {
     img.setAttribute('height', String(height));
     img.style.width = `${width}px`;
     img.style.height = `${height}px`;
+    figure?.removeAttribute('data-image-width');
+    if (figure) {
+      figure.style.width = 'fit-content';
+      figure.style.maxWidth = '100%';
+    }
   }
 
   if (!img.style.display) img.style.display = 'block';
@@ -292,7 +324,6 @@ export function sanitizeHtml(dirty) {
     if (!wrapTarget.closest('.te-figure')) {
       const figure = document.createElement('div');
       figure.className = 'te-figure';
-      figure.setAttribute('contenteditable', 'false');
       const align =
         img.style.textAlign ||
         img.getAttribute('data-align') ||
@@ -306,7 +337,7 @@ export function sanitizeHtml(dirty) {
   });
 
   wrapper.querySelectorAll('.te-figure').forEach((figure) => {
-    figure.setAttribute('contenteditable', 'false');
+    figure.removeAttribute('contenteditable');
     if (!figure.getAttribute('data-align')) {
       figure.setAttribute('data-align', figure.style.textAlign || 'center');
     }

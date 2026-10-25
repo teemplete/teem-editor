@@ -279,13 +279,13 @@
 .te-editor .te-figure {
   position: relative;
   display: block;
+  box-sizing: border-box;
   width: fit-content;
   max-width: 100%;
   margin: 0.85em 0;
   padding: 4px;
   border-radius: 10px;
   cursor: pointer;
-  user-select: none;
   outline: 2px solid transparent;
   outline-offset: 2px;
   transition: outline-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
@@ -304,6 +304,10 @@
 .te-editor .te-figure[data-align='right'] {
   margin-left: auto;
   margin-right: 0;
+}
+
+.te-editor .te-figure + p {
+  min-height: 1.6em;
 }
 
 .te-editor .te-figure:hover {
@@ -374,6 +378,12 @@
 
 .te-editor .te-figure__link img {
   display: block;
+}
+
+.te-editor .te-figure__alt-btn,
+.te-editor .te-figure__link-btn,
+.te-editor .te-figure__resize-handle {
+  user-select: none;
 }
 
 .te-editor .te-figure__resize-handle {
@@ -703,6 +713,19 @@
   outline: none;
 }
 
+.te-components__item.is-active {
+  background: var(--te-primary-soft);
+  color: var(--te-primary);
+  font-weight: 600;
+}
+
+.te-image-size .te-components__trigger .te-components__label {
+  max-width: 6.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .te-editor .te-accordion {
   margin: 0.75em 0;
   border: 1px solid #c7d2fe;
@@ -966,8 +989,22 @@
   margin: 1.25em 0;
 }
 
-/* Modal */
+/* Modal — portaled to document.body, so it carries its own tokens and
+   does not inherit the host page's theme. */
 .te-modal-backdrop {
+  --te-bg: #ffffff;
+  --te-surface: #f8fafc;
+  --te-border: #e2e8f0;
+  --te-border-strong: #cbd5e1;
+  --te-text: #0f172a;
+  --te-muted: #64748b;
+  --te-primary: #0f766e;
+  --te-primary-soft: #ccfbf1;
+  --te-danger: #dc2626;
+  --te-radius: 12px;
+  --te-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.06);
+  --te-font: 'Vazirmatn', 'IRANSansX', 'Tahoma', 'Segoe UI', sans-serif;
+
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -976,6 +1013,15 @@
   align-items: center;
   justify-content: center;
   padding: 16px;
+  color: var(--te-text);
+  font-family: var(--te-font);
+  font-size: 14px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.5;
+  letter-spacing: normal;
+  text-transform: none;
+  color-scheme: light;
 }
 
 .te-modal {
@@ -1214,6 +1260,256 @@
   border-color: #99f6e4;
   color: var(--te-primary);
   font-weight: 600;
+}
+
+/* Host pages often style button/input/h3/p globally, sometimes with equal or
+   higher specificity than a single class, and that CSS usually loads after
+   this file. These locks keep dialog controls on the editor palette. */
+.te-modal {
+  background-color: #fff !important;
+  color: #0f172a !important;
+  font-family: 'Vazirmatn', 'IRANSansX', 'Tahoma', 'Segoe UI', sans-serif !important;
+  border-style: none !important;
+  border-radius: 14px !important;
+}
+
+.te-modal__header,
+.te-modal__body,
+.te-modal__footer,
+.te-modal .te-form {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: inherit !important;
+}
+
+.te-modal__header {
+  border-bottom: 1px solid #e2e8f0 !important;
+}
+
+.te-modal__footer {
+  border-top: 1px solid #e2e8f0 !important;
+}
+
+.te-modal__header h3 {
+  margin: 0 !important;
+  color: #0f172a !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  font-family: inherit !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  line-height: 1.4 !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+}
+
+.te-modal__close {
+  border: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  color: #64748b !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 0 !important;
+  border-radius: 8px !important;
+  font-family: inherit !important;
+  opacity: 1 !important;
+}
+
+.te-modal__close:hover {
+  background: #f1f5f9 !important;
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+.te-modal .te-field,
+.te-modal .te-fieldset,
+.te-modal .te-fieldset legend,
+.te-modal .te-hint,
+.te-modal .te-error,
+.te-modal .te-field span {
+  margin: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  font-family: inherit !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  text-decoration: none !important;
+  box-shadow: none !important;
+}
+
+.te-modal .te-field {
+  color: #334155 !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+}
+
+.te-modal .te-fieldset {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  padding: 12px !important;
+  color: #334155 !important;
+}
+
+.te-modal .te-fieldset legend {
+  color: #334155 !important;
+  background: #fff !important;
+  background-color: #fff !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  padding: 0 6px !important;
+  width: auto !important;
+}
+
+.te-modal .te-hint {
+  color: #64748b !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+}
+
+.te-modal .te-error {
+  color: #dc2626 !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+}
+
+.te-modal .te-field input[type='text'],
+.te-modal .te-field input[type='url'],
+.te-modal .te-field input[type='file'],
+.te-modal .te-field select,
+.te-modal .te-textarea {
+  margin: 0 !important;
+  background: #fff !important;
+  background-color: #fff !important;
+  background-image: none !important;
+  color: #0f172a !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  font-family: 'Vazirmatn', 'IRANSansX', 'Tahoma', 'Segoe UI', sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  line-height: 1.4 !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  text-decoration: none !important;
+  opacity: 1 !important;
+  appearance: auto !important;
+  -webkit-appearance: auto !important;
+}
+
+.te-modal .te-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    'Courier New', monospace !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+
+.te-modal .te-field input::placeholder,
+.te-modal .te-textarea::placeholder {
+  color: #94a3b8 !important;
+  opacity: 1 !important;
+}
+
+.te-modal .te-field input:focus,
+.te-modal .te-field select:focus,
+.te-modal .te-textarea:focus {
+  outline: 2px solid #99f6e4 !important;
+  border-color: #2dd4bf !important;
+}
+
+.te-modal .te-field select,
+.te-modal .te-field option {
+  color: #0f172a !important;
+  background-color: #fff !important;
+}
+
+.te-modal .te-btn,
+.te-modal .te-tabs button {
+  margin: 0 !important;
+  box-shadow: none !important;
+  background-image: none !important;
+  font-family: 'Vazirmatn', 'IRANSansX', 'Tahoma', 'Segoe UI', sans-serif !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  text-decoration: none !important;
+  line-height: 1 !important;
+  opacity: 1 !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+}
+
+.te-modal .te-btn {
+  width: auto !important;
+  min-width: 0 !important;
+  height: 38px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+}
+
+.te-modal .te-btn--ghost {
+  background: #fff !important;
+  background-color: #fff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #334155 !important;
+}
+
+.te-modal .te-btn--ghost:hover {
+  background: #f8fafc !important;
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+.te-modal .te-btn--primary {
+  background: #0f766e !important;
+  background-color: #0f766e !important;
+  border: 1px solid transparent !important;
+  color: #fff !important;
+}
+
+.te-modal .te-btn--primary:hover {
+  background: #0d9488 !important;
+  background-color: #0d9488 !important;
+  border-color: transparent !important;
+  color: #fff !important;
+}
+
+.te-modal .te-btn:disabled {
+  opacity: 0.55 !important;
+}
+
+.te-modal .te-tabs button {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  height: 36px !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 9px !important;
+  background: #fff !important;
+  background-color: #fff !important;
+  color: #475569 !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+}
+
+.te-modal .te-tabs button.is-active {
+  background: #ccfbf1 !important;
+  background-color: #ccfbf1 !important;
+  border-color: #99f6e4 !important;
+  color: #0f766e !important;
+  font-weight: 600 !important;
+}
+
+.te-modal svg {
+  color: inherit !important;
+  fill: none !important;
+  stroke: currentColor !important;
 }
 
 @media (max-width: 640px) {
