@@ -732,7 +732,7 @@ export function Toolbar({
         >
           {Icons.cta}
         </ToolButton>
-        <ToolButton label={t.insertImage} disabled={formattingDisabled} onClick={onOpenImage}>
+        <ToolButton label={t.insertMedia} disabled={formattingDisabled} onClick={onOpenImage}>
           {Icons.image}
         </ToolButton>
         {states.hasSelectedImage ? (

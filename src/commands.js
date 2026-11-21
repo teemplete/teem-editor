@@ -1,5 +1,5 @@
 import { isEditorContentEmpty } from './content.js';
-import { isSafeHref, isSafeImageSrc, flattenStyleSpans, sanitizeHtml } from './sanitize.js';
+import { isSafeHref, isSafeImageSrc, isSafeVideoSrc, flattenStyleSpans, sanitizeHtml } from './sanitize.js';
 
 export function focusEditor(editor) {
   if (!editor) return;
@@ -105,6 +105,7 @@ export function getLinkAtSelection(editor, range = null) {
     element: anchor,
     url: anchor.getAttribute('href') || '',
     text: anchor.textContent || '',
+    ...getLinkOptionsFromAnchor(anchor),
   };
 }
 
@@ -126,10 +127,38 @@ export function selectAnchor(anchor) {
   return restoreSelection(range);
 }
 
-function applyLinkAttributes(anchor, url) {
+function splitRelTokens(rel) {
+  return (rel || '').split(/\s+/).filter(Boolean);
+}
+
+export function getLinkOptionsFromAnchor(anchor) {
+  if (!anchor) return { openInNewTab: false, nofollow: false };
+  const rel = splitRelTokens(anchor.getAttribute('rel'));
+  return {
+    openInNewTab: anchor.getAttribute('target') === '_blank',
+    nofollow: rel.includes('nofollow'),
+  };
+}
+
+function buildLinkRel({ nofollow = false, openInNewTab = false } = {}) {
+  const tokens = [];
+  if (nofollow) tokens.push('nofollow');
+  if (openInNewTab) {
+    tokens.push('noopener', 'noreferrer');
+  }
+  return tokens.join(' ');
+}
+
+function applyLinkAttributes(anchor, url, options = {}) {
+  const { openInNewTab = false, nofollow = false } = options;
   anchor.setAttribute('href', url);
-  anchor.setAttribute('rel', 'noopener noreferrer');
-  if (/^https?:/i.test(url)) {
+  const rel = buildLinkRel({ nofollow, openInNewTab });
+  if (rel) {
+    anchor.setAttribute('rel', rel);
+  } else {
+    anchor.removeAttribute('rel');
+  }
+  if (openInNewTab) {
     anchor.setAttribute('target', '_blank');
   } else {
     anchor.removeAttribute('target');
@@ -151,10 +180,13 @@ function getImageLinkAnchor(img) {
 }
 
 export function getImageLinkInfo(img) {
-  if (!img) return { mode: IMAGE_LINK_NONE, href: '' };
+  const empty = { mode: IMAGE_LINK_NONE, href: '', openInNewTab: false, nofollow: false };
+  if (!img) return empty;
 
   const anchor = getImageLinkAnchor(img);
-  if (!anchor) return { mode: IMAGE_LINK_NONE, href: '' };
+  if (!anchor) return empty;
+
+  const linkOptions = getLinkOptionsFromAnchor(anchor);
 
   if (
     anchor.hasAttribute('data-te-lightbox') ||
@@ -163,6 +195,8 @@ export function getImageLinkInfo(img) {
     return {
       mode: IMAGE_LINK_LIGHTBOX,
       href: anchor.getAttribute('href') || img.getAttribute('src') || '',
+      openInNewTab: false,
+      nofollow: false,
     };
   }
 
@@ -170,6 +204,8 @@ export function getImageLinkInfo(img) {
   return {
     mode: mode === IMAGE_LINK_FILE ? IMAGE_LINK_FILE : IMAGE_LINK_URL,
     href: anchor.getAttribute('href') || '',
+    openInNewTab: linkOptions.openInNewTab,
+    nofollow: linkOptions.nofollow,
   };
 }
 
@@ -193,7 +229,17 @@ function resolveImageSrcHref(img, href) {
   return null;
 }
 
-export function applyImageLink(img, { mode, href } = {}, messages) {
+function resolveMediaSrcHref(media, href) {
+  const candidate = (href || media.getAttribute('src') || '').trim();
+  if (!candidate) return null;
+  if (media.tagName === 'VIDEO') {
+    if (isSafeVideoSrc(candidate) || isSafeHref(candidate)) return candidate;
+    return null;
+  }
+  return resolveImageSrcHref(media, candidate);
+}
+
+export function applyImageLink(img, { mode, href, openInNewTab = false, nofollow = false } = {}, messages) {
   if (!img) return;
   unwrapImageLink(img);
 
@@ -202,6 +248,7 @@ export function applyImageLink(img, { mode, href } = {}, messages) {
   const t = messages || {};
   const anchor = document.createElement('a');
   anchor.className = 'te-figure__link';
+  const linkAttrs = { openInNewTab: !!openInNewTab, nofollow: !!nofollow };
 
   if (mode === IMAGE_LINK_LIGHTBOX) {
     const linkHref = resolveImageSrcHref(img, href);
@@ -214,25 +261,23 @@ export function applyImageLink(img, { mode, href } = {}, messages) {
     anchor.classList.add('te-figure__link--lightbox');
     anchor.setAttribute('data-te-lightbox', 'true');
     anchor.setAttribute('data-te-link-mode', IMAGE_LINK_LIGHTBOX);
-    anchor.setAttribute('rel', 'noopener noreferrer');
     anchor.removeAttribute('target');
+    anchor.removeAttribute('rel');
   } else if (mode === IMAGE_LINK_FILE) {
-    const linkHref = resolveImageSrcHref(img, href);
+    const linkHref = resolveMediaSrcHref(img, href);
     if (!linkHref) {
       throw new Error(
         (messages && messages.imageLinkInvalid) || 'Invalid image link.'
       );
     }
-    anchor.setAttribute('href', linkHref);
-    anchor.setAttribute('rel', 'noopener noreferrer');
-    anchor.setAttribute('target', '_blank');
+    applyLinkAttributes(anchor, linkHref, linkAttrs);
     anchor.setAttribute('data-te-link-mode', IMAGE_LINK_FILE);
   } else {
     const trimmed = (href || '').trim();
     if (!trimmed || !isSafeHref(trimmed)) {
       throw new Error((t.linkUnsafe) || 'The link URL is invalid or unsafe.');
     }
-    applyLinkAttributes(anchor, trimmed);
+    applyLinkAttributes(anchor, trimmed, linkAttrs);
     anchor.setAttribute('data-te-link-mode', IMAGE_LINK_URL);
   }
 
@@ -243,12 +288,12 @@ export function removeImageLink(img) {
   unwrapImageLink(img);
 }
 
-export function updateLink(editor, anchor, url, text, messages) {
+export function updateLink(editor, anchor, url, text, messages, linkOptions = {}) {
   if (!editor || !anchor || !editor.contains(anchor)) return false;
   if (!isSafeHref(url)) {
     throw new Error((messages && messages.linkUnsafe) || 'The link URL is invalid or unsafe.');
   }
-  applyLinkAttributes(anchor, url);
+  applyLinkAttributes(anchor, url, linkOptions);
   if (text) anchor.textContent = text;
   return true;
 }
@@ -916,8 +961,8 @@ export function setImageWidth(img, spec) {
 }
 
 function getImageAspectRatio(img, fallbackWidth) {
-  const naturalW = img.naturalWidth;
-  const naturalH = img.naturalHeight;
+  const naturalW = img.naturalWidth || img.videoWidth;
+  const naturalH = img.naturalHeight || img.videoHeight;
   if (naturalW > 0 && naturalH > 0) return naturalH / naturalW;
 
   const attrW = parseInt(img.getAttribute('width') || '', 10);
@@ -954,6 +999,14 @@ export function commitImageSize(img, width, height) {
 
 export function whenImageReady(img) {
   if (!img) return Promise.resolve();
+  if (img.tagName === 'VIDEO') {
+    if (img.readyState >= 1) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => resolve();
+      img.addEventListener('loadedmetadata', done, { once: true });
+      img.addEventListener('error', done, { once: true });
+    });
+  }
   if (img.complete && img.naturalWidth > 0) return Promise.resolve();
   return new Promise((resolve) => {
     const done = () => resolve();
@@ -994,20 +1047,25 @@ export function selectImage(img, editor, messages) {
   figure.classList.add('is-selected');
   img.classList.add('is-selected');
 
-  let altBtn = figure.querySelector('.te-figure__alt-btn');
-  if (!altBtn) {
-    altBtn = document.createElement('button');
-    altBtn.type = 'button';
-    altBtn.className = 'te-figure__alt-btn';
-    altBtn.setAttribute('contenteditable', 'false');
-    figure.appendChild(altBtn);
-  }
   const t = messages || {};
-  const currentAlt = img.getAttribute('alt') || '';
-  altBtn.textContent = currentAlt
-    ? `Alt: ${currentAlt.length > 28 ? `${currentAlt.slice(0, 28)}…` : currentAlt}`
-    : t.editAlt || 'Edit Alt';
-  altBtn.title = t.editAltTitle || 'Edit image alt text';
+  const isVideo = img.tagName === 'VIDEO';
+  if (isVideo) {
+    figure.querySelector('.te-figure__alt-btn')?.remove();
+  } else {
+    let altBtn = figure.querySelector('.te-figure__alt-btn');
+    if (!altBtn) {
+      altBtn = document.createElement('button');
+      altBtn.type = 'button';
+      altBtn.className = 'te-figure__alt-btn';
+      altBtn.setAttribute('contenteditable', 'false');
+      figure.appendChild(altBtn);
+    }
+    const currentAlt = img.getAttribute('alt') || '';
+    altBtn.textContent = currentAlt
+      ? `Alt: ${currentAlt.length > 28 ? `${currentAlt.slice(0, 28)}…` : currentAlt}`
+      : t.editAlt || 'Edit Alt';
+    altBtn.title = t.editAltTitle || 'Edit image alt text';
+  }
 
   let linkBtn = figure.querySelector('.te-figure__link-btn');
   if (!linkBtn) {
@@ -1034,7 +1092,7 @@ export function selectImage(img, editor, messages) {
     resizeHandle.className = 'te-figure__resize-handle';
     resizeHandle.setAttribute('contenteditable', 'false');
     resizeHandle.setAttribute('role', 'presentation');
-    resizeHandle.title = t.resizeImage || 'Resize image';
+    resizeHandle.title = (isVideo ? t.resizeVideo : t.resizeImage) || t.resizeImage || 'Resize image';
     figure.appendChild(resizeHandle);
   }
 
@@ -1110,7 +1168,7 @@ export function startImageResize(img, startEvent, { editor, onComplete } = {}) {
 
 export function clearImageSelection(editor) {
   if (!editor) return;
-  editor.querySelectorAll('.te-figure.is-selected, img.is-selected').forEach((el) => {
+  editor.querySelectorAll('.te-figure.is-selected, img.is-selected, video.is-selected').forEach((el) => {
     el.classList.remove('is-selected');
   });
   editor.querySelectorAll('.te-figure__alt-btn, .te-figure__link-btn, .te-figure__resize-handle').forEach((btn) =>
@@ -1197,7 +1255,7 @@ function stripEditorUiFromRoot(root) {
 }
 
 function getSelectedFigure(editor) {
-  const selected = editor?.querySelector('.te-figure.is-selected, img.is-selected');
+  const selected = editor?.querySelector('.te-figure.is-selected, img.is-selected, video.is-selected');
   if (!selected || !editor.contains(selected)) return null;
   if (selected.classList.contains('te-figure')) return selected;
   return selected.closest?.('.te-figure');
@@ -1440,7 +1498,7 @@ export function cutEditorSelection(editor) {
 export function removeSelectedImage(editor) {
   if (!editor) return false;
 
-  const selected = editor.querySelector('.te-figure.is-selected, img.is-selected');
+  const selected = editor.querySelector('.te-figure.is-selected, img.is-selected, video.is-selected');
   if (!selected) return false;
 
   const figure = selected.classList?.contains('te-figure')
@@ -1509,7 +1567,7 @@ export function setDirection(editor, dir) {
   }
 }
 
-export function insertLink(editor, url, text, messages) {
+export function insertLink(editor, url, text, messages, linkOptions = {}) {
   focusEditor(editor);
   if (!isSafeHref(url)) {
     throw new Error((messages && messages.linkUnsafe) || 'The link URL is invalid or unsafe.');
@@ -1522,12 +1580,12 @@ export function insertLink(editor, url, text, messages) {
     exec('createLink', url);
     const anchors = editor.querySelectorAll('a[href]');
     const last = anchors[anchors.length - 1];
-    if (last) applyLinkAttributes(last, url);
+    if (last) applyLinkAttributes(last, url, linkOptions);
   } else {
     const label = text || url;
     const safe = document.createElement('a');
     safe.textContent = label;
-    applyLinkAttributes(safe, url);
+    applyLinkAttributes(safe, url, linkOptions);
     insertNode(editor, safe);
   }
 }
@@ -1556,19 +1614,19 @@ export function getCtaAtSelection(editor, range = null) {
   };
 }
 
-export function updateCta(editor, anchor, url, text, classes, messages) {
+export function updateCta(editor, anchor, url, text, classes, messages, linkOptions = {}) {
   if (!editor || !anchor || !editor.contains(anchor)) return false;
   if (!isSafeHref(url)) {
     throw new Error((messages && messages.linkUnsafe) || 'The link URL is invalid or unsafe.');
   }
-  applyLinkAttributes(anchor, url);
+  applyLinkAttributes(anchor, url, linkOptions);
   if (text) anchor.textContent = text;
   const classList = normalizeClassList(classes);
   anchor.className = classList || 'te-cta';
   return true;
 }
 
-export function insertCta(editor, url, text, classes, messages) {
+export function insertCta(editor, url, text, classes, messages, linkOptions = {}) {
   focusEditor(editor);
   if (!isSafeHref(url)) {
     throw new Error((messages && messages.linkUnsafe) || 'The link URL is invalid or unsafe.');
@@ -1578,7 +1636,7 @@ export function insertCta(editor, url, text, classes, messages) {
   const label = text || url;
   const anchor = document.createElement('a');
   anchor.textContent = label;
-  applyLinkAttributes(anchor, url);
+  applyLinkAttributes(anchor, url, linkOptions);
   anchor.className = classList;
   insertNode(editor, anchor);
 }
@@ -2396,20 +2454,62 @@ export function insertTable(editor, rows = 3, cols = 3) {
   }
 }
 
+function createMediaFigure(align = 'center') {
+  const figure = document.createElement('div');
+  figure.className = 'te-figure';
+  figure.setAttribute('data-align', align);
+  figure.style.textAlign = align;
+  figure.style.width = 'fit-content';
+  figure.style.maxWidth = '100%';
+  figure.style.marginLeft = 'auto';
+  figure.style.marginRight = 'auto';
+  return figure;
+}
+
+export function insertVideo(editor, src, linkOptions = null, messages) {
+  focusEditor(editor);
+  if (!isSafeVideoSrc(src)) {
+    throw new Error((messages && messages.videoUnsafe) || 'The video URL is invalid or unsafe.');
+  }
+
+  const figure = createMediaFigure('center');
+  figure.setAttribute('data-te-media', 'video');
+  figure.setAttribute('data-image-width', '100%');
+  figure.style.width = '100%';
+
+  const video = document.createElement('video');
+  video.src = src;
+  video.controls = true;
+  video.setAttribute('playsinline', '');
+  video.preload = 'metadata';
+  video.draggable = false;
+  video.setAttribute('contenteditable', 'false');
+  video.style.display = 'block';
+  video.style.width = '100%';
+  video.style.maxWidth = '100%';
+  video.style.height = 'auto';
+
+  figure.appendChild(video);
+  insertNode(editor, figure);
+
+  if (linkOptions?.mode && linkOptions.mode !== IMAGE_LINK_NONE) {
+    applyImageLink(video, linkOptions, messages);
+  }
+
+  const p = document.createElement('p');
+  p.innerHTML = '<br>';
+  insertNode(editor, p);
+
+  return video;
+}
+
 export function insertImage(editor, src, alt = '', linkOptions = null, messages) {
   focusEditor(editor);
   if (!isSafeImageSrc(src)) {
     throw new Error((messages && messages.imageUnsafe) || 'The image URL is invalid or unsafe.');
   }
 
-  const figure = document.createElement('div');
-  figure.className = 'te-figure';
-  figure.setAttribute('data-align', 'center');
-  figure.style.textAlign = 'center';
-  figure.style.width = 'fit-content';
-  figure.style.maxWidth = '100%';
-  figure.style.marginLeft = 'auto';
-  figure.style.marginRight = 'auto';
+  const figure = createMediaFigure('center');
 
   const img = document.createElement('img');
   img.src = src;
@@ -2456,7 +2556,9 @@ function insertNode(editor, node) {
 }
 
 export function getActiveStates(editor) {
-  const selectedImage = editor?.querySelector?.('.te-figure.is-selected, img.is-selected');
+  const selectedImage = editor?.querySelector?.(
+    '.te-figure.is-selected, img.is-selected, video.is-selected'
+  );
   let imageAlign = null;
   if (selectedImage) {
     const figure = selectedImage.classList?.contains('te-figure')
@@ -2482,7 +2584,9 @@ export function getActiveStates(editor) {
     imageWidth: (() => {
       if (!selectedImage) return null;
       const img =
-        selectedImage.tagName === 'IMG' ? selectedImage : selectedImage.querySelector?.('img');
+        selectedImage.tagName === 'IMG' || selectedImage.tagName === 'VIDEO'
+          ? selectedImage
+          : selectedImage.querySelector?.('img, video');
       return getImageWidthState(img);
     })(),
     link: !!getLinkAtSelection(editor) && !getCtaAtSelection(editor),

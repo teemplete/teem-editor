@@ -182,4 +182,159 @@ export async function processImageUpload(file, options = {}) {
   }
 }
 
-export { DEFAULT_OPTIONS as uploadDefaults };
+const VIDEO_DEFAULT_OPTIONS = {
+  maxSizeBytes: 20 * 1024 * 1024,
+  allowedMimeTypes: ['video/mp4', 'video/webm', 'video/ogg'],
+  allowedExtensions: ['.mp4', '.webm', '.ogg', '.ogv'],
+};
+
+function isIsoBmff(bytes) {
+  return (
+    bytes.length >= 8 &&
+    bytes[4] === 0x66 &&
+    bytes[5] === 0x74 &&
+    bytes[6] === 0x79 &&
+    bytes[7] === 0x70
+  );
+}
+
+function isWebm(bytes) {
+  return bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
+}
+
+function isOgg(bytes) {
+  return bytes.length >= 4 && bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53;
+}
+
+function detectVideoMime(bytes) {
+  if (isWebm(bytes)) return 'video/webm';
+  if (isOgg(bytes)) return 'video/ogg';
+  if (isIsoBmff(bytes)) return 'video/mp4';
+  return null;
+}
+
+function expectedVideoMime(ext) {
+  if (ext === '.webm') return 'video/webm';
+  if (ext === '.ogg' || ext === '.ogv') return 'video/ogg';
+  if (ext === '.mp4') return 'video/mp4';
+  return null;
+}
+
+/**
+ * Validate a video file before upload.
+ * Checks size, extension, claimed MIME, and container signature.
+ */
+export async function validateVideoFile(file, options = {}) {
+  const opts = { ...VIDEO_DEFAULT_OPTIONS, ...options };
+  const t = resolveMessages(options);
+  const errors = [];
+
+  if (!file || !(file instanceof Blob)) {
+    return { ok: false, errors: [t.fileInvalid || 'Invalid file.'] };
+  }
+
+  if (file.size <= 0) {
+    errors.push(t.fileEmpty || 'File is empty.');
+  }
+
+  if (file.size > opts.maxSizeBytes) {
+    const mb = (opts.maxSizeBytes / (1024 * 1024)).toFixed(0);
+    errors.push(t.fileTooLarge ? t.fileTooLarge(mb) : `File size must not exceed ${mb} MB.`);
+  }
+
+  const ext = getExtension(file.name || '');
+  if (!opts.allowedExtensions.includes(ext)) {
+    errors.push(t.videoBadExtension || 'File extension is not allowed. Only mp4, webm, and ogg.');
+  }
+
+  const claimed = (file.type || '').toLowerCase();
+  if (claimed && !opts.allowedMimeTypes.includes(claimed)) {
+    errors.push(t.videoBadMime || 'File type is not allowed.');
+  }
+
+  let detected = null;
+  try {
+    const bytes = await readMagicBytes(file, 32);
+    detected = detectVideoMime(bytes);
+    const expected = expectedVideoMime(ext);
+    if (!detected || (expected && detected !== expected)) {
+      errors.push(t.videoBadContent || 'File content is not a valid video.');
+    } else if (claimed && claimed !== detected && !(claimed === 'video/quicktime' && detected === 'video/mp4')) {
+      errors.push(t.fileMimeMismatch || 'Declared file type does not match actual content.');
+    }
+  } catch {
+    errors.push(t.fileReadError || 'Failed to read the file.');
+  }
+
+  if (errors.length) {
+    return { ok: false, errors };
+  }
+
+  return {
+    ok: true,
+    mime: detected || claimed,
+    safeName: sanitizeFileName(file.name || `video${ext}`),
+    errors: [],
+  };
+}
+
+function fileToVideoDataUrl(file, mime) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string' || !result.startsWith('data:')) {
+        reject(new Error('Failed to encode video.'));
+        return;
+      }
+      const comma = result.indexOf(',');
+      if (comma === -1) {
+        reject(new Error('Failed to encode video.'));
+        return;
+      }
+      resolve(`data:${mime || 'video/mp4'};base64,${result.slice(comma + 1)}`);
+    };
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Secure video insert pipeline:
+ * 1) validate file
+ * 2) call optional onUpload(file) → url
+ * 3) otherwise embed as a base64 data URL
+ */
+export async function processVideoUpload(file, options = {}) {
+  const t = resolveMessages(options);
+  const validation = await validateVideoFile(file, {
+    ...VIDEO_DEFAULT_OPTIONS,
+    maxSizeBytes: options.maxSizeBytes || VIDEO_DEFAULT_OPTIONS.maxSizeBytes,
+    messages: options.messages,
+    language: options.language,
+  });
+  if (!validation.ok) {
+    throw new Error(validation.errors.join(' '));
+  }
+
+  if (typeof options.onUpload === 'function') {
+    const result = await options.onUpload(file, {
+      mime: validation.mime,
+      safeName: validation.safeName,
+    });
+
+    if (!result || typeof result !== 'string') {
+      throw new Error(t.videoUploadFailed || 'Video upload failed.');
+    }
+
+    return result;
+  }
+
+  try {
+    return await fileToVideoDataUrl(file, validation.mime);
+  } catch {
+    throw new Error(t.fileReadError || 'Failed to read the file.');
+  }
+}
+
+export { DEFAULT_OPTIONS as uploadDefaults, VIDEO_DEFAULT_OPTIONS as videoUploadDefaults };
