@@ -57,6 +57,35 @@ export function Modal({ open, title, onClose, children, footer, closeLabel = 'Cl
   return typeof document !== 'undefined' ? createPortal(modal, document.body) : null;
 }
 
+export function LinkTargetFields({
+  t,
+  openInNewTab,
+  onOpenInNewTabChange,
+  nofollow,
+  onNofollowChange,
+}) {
+  return (
+    <div className="te-link-target-fields">
+      <label className="te-field te-field--check">
+        <input
+          type="checkbox"
+          checked={openInNewTab}
+          onChange={(e) => onOpenInNewTabChange(e.target.checked)}
+        />
+        <span>{t.linkOpenNewTab}</span>
+      </label>
+      <label className="te-field te-field--check">
+        <input
+          type="checkbox"
+          checked={nofollow}
+          onChange={(e) => onNofollowChange(e.target.checked)}
+        />
+        <span>{t.linkNofollow}</span>
+      </label>
+    </div>
+  );
+}
+
 export function CtaDialog({
   open,
   onClose,
@@ -64,12 +93,16 @@ export function CtaDialog({
   initialUrl = '',
   initialText = '',
   initialClasses = '',
+  initialOpenInNewTab = false,
+  initialNofollow = false,
   isEdit = false,
   t,
 }) {
   const [url, setUrl] = useState(initialUrl);
   const [text, setText] = useState(initialText);
   const [classes, setClasses] = useState(initialClasses);
+  const [openInNewTab, setOpenInNewTab] = useState(initialOpenInNewTab);
+  const [nofollow, setNofollow] = useState(initialNofollow);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -77,9 +110,11 @@ export function CtaDialog({
       setUrl(initialUrl);
       setText(initialText);
       setClasses(initialClasses);
+      setOpenInNewTab(initialOpenInNewTab);
+      setNofollow(initialNofollow);
       setError('');
     }
-  }, [open, initialUrl, initialText, initialClasses]);
+  }, [open, initialUrl, initialText, initialClasses, initialOpenInNewTab, initialNofollow]);
 
   const confirm = () => {
     const trimmedUrl = url.trim();
@@ -93,7 +128,13 @@ export function CtaDialog({
       return;
     }
     try {
-      onSubmit({ url: trimmedUrl, text: trimmedText, classes: classes.trim() });
+      onSubmit({
+        url: trimmedUrl,
+        text: trimmedText,
+        classes: classes.trim(),
+        openInNewTab,
+        nofollow,
+      });
       onClose();
     } catch (err) {
       setError(err.message || t.ctaInvalid);
@@ -155,6 +196,13 @@ export function CtaDialog({
           />
         </label>
         <p className="te-hint">{t.ctaClassesHint}</p>
+        <LinkTargetFields
+          t={t}
+          openInNewTab={openInNewTab}
+          onOpenInNewTabChange={setOpenInNewTab}
+          nofollow={nofollow}
+          onNofollowChange={setNofollow}
+        />
         {error ? <p className="te-error">{error}</p> : null}
       </form>
     </Modal>
@@ -167,20 +215,26 @@ export function LinkDialog({
   onSubmit,
   initialUrl = '',
   initialText = '',
+  initialOpenInNewTab = false,
+  initialNofollow = false,
   isEdit = false,
   t,
 }) {
   const [url, setUrl] = useState(initialUrl);
   const [text, setText] = useState(initialText);
+  const [openInNewTab, setOpenInNewTab] = useState(initialOpenInNewTab);
+  const [nofollow, setNofollow] = useState(initialNofollow);
   const [error, setError] = useState('');
 
   useEffect(() => {
     if (open) {
       setUrl(initialUrl);
       setText(initialText);
+      setOpenInNewTab(initialOpenInNewTab);
+      setNofollow(initialNofollow);
       setError('');
     }
-  }, [open, initialUrl, initialText]);
+  }, [open, initialUrl, initialText, initialOpenInNewTab, initialNofollow]);
 
   const confirm = () => {
     const trimmed = url.trim();
@@ -189,7 +243,7 @@ export function LinkDialog({
       return;
     }
     try {
-      onSubmit({ url: trimmed, text: text.trim() });
+      onSubmit({ url: trimmed, text: text.trim(), openInNewTab, nofollow });
       onClose();
     } catch (err) {
       setError(err.message || t.linkInvalid);
@@ -239,6 +293,13 @@ export function LinkDialog({
             onChange={(e) => setText(e.target.value)}
           />
         </label>
+        <LinkTargetFields
+          t={t}
+          openInNewTab={openInNewTab}
+          onOpenInNewTabChange={setOpenInNewTab}
+          nofollow={nofollow}
+          onNofollowChange={setNofollow}
+        />
         {error ? <p className="te-error">{error}</p> : null}
       </form>
     </Modal>
@@ -402,17 +463,33 @@ export function LinkPopover({
   );
 }
 
-export function ImageLinkFields({ t, mode, onModeChange, url, onUrlChange }) {
+export function ImageLinkFields({
+  t,
+  mode,
+  onModeChange,
+  url,
+  onUrlChange,
+  openInNewTab = false,
+  onOpenInNewTabChange,
+  nofollow = false,
+  onNofollowChange,
+  allowLightbox = true,
+  fileOptionLabel,
+  fileHint,
+  legend,
+}) {
+  const showLinkAttrs = mode === 'url' || mode === 'file';
+
   return (
     <fieldset className="te-fieldset">
-      <legend>{t.imageLinkTitle}</legend>
+      <legend>{legend || t.imageLinkTitle}</legend>
       <label className="te-field">
         <span>{t.imageLinkMode}</span>
         <select value={mode} onChange={(e) => onModeChange(e.target.value)}>
           <option value="none">{t.imageLinkNone}</option>
           <option value="url">{t.imageLinkUrl}</option>
-          <option value="file">{t.imageLinkFile}</option>
-          <option value="lightbox">{t.imageLinkLightbox}</option>
+          <option value="file">{fileOptionLabel || t.imageLinkFile}</option>
+          {allowLightbox ? <option value="lightbox">{t.imageLinkLightbox}</option> : null}
         </select>
       </label>
       {mode === 'url' ? (
@@ -427,51 +504,76 @@ export function ImageLinkFields({ t, mode, onModeChange, url, onUrlChange }) {
           />
         </label>
       ) : null}
-      {mode === 'file' ? <p className="te-hint">{t.imageLinkFileHint}</p> : null}
+      {mode === 'file' ? <p className="te-hint">{fileHint || t.imageLinkFileHint}</p> : null}
       {mode === 'lightbox' ? <p className="te-hint">{t.imageLinkLightboxHint}</p> : null}
+      {showLinkAttrs ? (
+        <LinkTargetFields
+          t={t}
+          openInNewTab={openInNewTab}
+          onOpenInNewTabChange={onOpenInNewTabChange}
+          nofollow={nofollow}
+          onNofollowChange={onNofollowChange}
+        />
+      ) : null}
     </fieldset>
   );
 }
 
-export function ImageDialog({
-  open,
-  onClose,
-  onSubmitUrl,
-  onSubmitFile,
-  accept = 'image/jpeg,image/png,image/gif,image/webp',
-  t,
-}) {
+export function ImageDialog({ open, onClose, onSubmitUrl, onSubmitFile, t }) {
+  const [kind, setKind] = useState('image');
   const [tab, setTab] = useState('file');
   const [url, setUrl] = useState('');
   const [alt, setAlt] = useState('');
   const [linkMode, setLinkMode] = useState('none');
   const [linkUrl, setLinkUrl] = useState('');
+  const [openInNewTab, setOpenInNewTab] = useState(false);
+  const [nofollow, setNofollow] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const fileRef = useRef(null);
+  const isVideo = kind === 'video';
+  const accept = isVideo
+    ? 'video/mp4,video/webm,video/ogg,.mp4,.webm,.ogg,.ogv'
+    : 'image/jpeg,image/png,image/gif,image/webp';
 
   useEffect(() => {
     if (open) {
+      setKind('image');
       setTab('file');
       setUrl('');
       setAlt('');
       setLinkMode('none');
       setLinkUrl('');
+      setOpenInNewTab(false);
+      setNofollow(false);
       setError('');
       setBusy(false);
       if (fileRef.current) fileRef.current.value = '';
     }
   }, [open]);
 
+  const selectKind = (next) => {
+    setKind(next);
+    setError('');
+    if (next === 'video' && linkMode === 'lightbox') setLinkMode('none');
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const linkFlags = () =>
+    linkMode === 'url' || linkMode === 'file'
+      ? { openInNewTab, nofollow }
+      : { openInNewTab: false, nofollow: false };
+
   const buildLinkPayload = () => {
-    if (linkMode === 'none') return { mode: 'none', href: '' };
-    if (linkMode === 'lightbox') return { mode: 'lightbox', href: '' };
+    const flags = linkFlags();
+    if (linkMode === 'none') return { mode: 'none', href: '', ...flags };
+    if (linkMode === 'lightbox') return { mode: 'lightbox', href: '', ...flags };
     if (linkMode === 'url') {
       const trimmed = linkUrl.trim();
       if (!trimmed) throw new Error(t.imageLinkUrlRequired);
-      return { mode: 'url', href: trimmed };
+      return { mode: 'url', href: trimmed, ...flags };
     }
-    return { mode: 'file', href: '' };
+    return { mode: 'file', href: '', ...flags };
   };
 
   const confirmUrl = async () => {
@@ -479,10 +581,10 @@ export function ImageDialog({
     setBusy(true);
     try {
       const link = buildLinkPayload();
-      await onSubmitUrl({ url: url.trim(), alt: alt.trim(), link });
+      await onSubmitUrl({ kind, url: url.trim(), alt: alt.trim(), link });
       onClose();
     } catch (err) {
-      setError(err.message || t.imageInsertFailed);
+      setError(err.message || (isVideo ? t.videoInsertFailed : t.imageInsertFailed));
     } finally {
       setBusy(false);
     }
@@ -491,17 +593,17 @@ export function ImageDialog({
   const confirmFile = async () => {
     const file = fileRef.current?.files?.[0];
     if (!file) {
-      setError(t.imagePickFile);
+      setError(isVideo ? t.videoPickFile : t.imagePickFile);
       return;
     }
     setError('');
     setBusy(true);
     try {
       const link = buildLinkPayload();
-      await onSubmitFile({ file, alt: alt.trim(), link });
+      await onSubmitFile({ kind, file, alt: alt.trim(), link });
       onClose();
     } catch (err) {
-      setError(err.message || t.imageUploadFailed);
+      setError(err.message || (isVideo ? t.videoUploadFailed : t.imageUploadFailed));
     } finally {
       setBusy(false);
     }
@@ -520,7 +622,7 @@ export function ImageDialog({
   return (
     <Modal
       open={open}
-      title={t.imageTitle}
+      title={t.mediaTitle}
       onClose={onClose}
       closeLabel={t.close}
       footer={
@@ -534,11 +636,32 @@ export function ImageDialog({
             disabled={busy}
             onClick={() => (tab === 'file' ? confirmFile() : confirmUrl())}
           >
-            {busy ? t.imageBusy : t.imageSubmit}
+            {busy ? t.imageBusy : isVideo ? t.videoSubmit : t.imageSubmit}
           </button>
         </>
       }
     >
+      <div className="te-tabs" role="tablist" aria-label={t.mediaTitle}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!isVideo}
+          className={!isVideo ? 'is-active' : ''}
+          onClick={() => selectKind('image')}
+        >
+          {t.mediaImage}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={isVideo}
+          className={isVideo ? 'is-active' : ''}
+          onClick={() => selectKind('video')}
+        >
+          {t.mediaVideo}
+        </button>
+      </div>
+
       <div className="te-tabs" role="tablist">
         <button
           type="button"
@@ -563,32 +686,42 @@ export function ImageDialog({
       {tab === 'file' ? (
         <form onSubmit={handleFile} className="te-form">
           <label className="te-field">
-            <span>{t.imageFile}</span>
-            <input ref={fileRef} type="file" accept={accept} />
+            <span>{isVideo ? t.videoFile : t.imageFile}</span>
+            <input key={kind} ref={fileRef} type="file" accept={accept} />
           </label>
-          <label className="te-field">
-            <span>{t.imageAlt}</span>
-            <input
-              type="text"
-              value={alt}
-              onChange={(e) => setAlt(e.target.value)}
-              placeholder={t.imageAltPlaceholder}
-            />
-          </label>
+          {isVideo ? null : (
+            <label className="te-field">
+              <span>{t.imageAlt}</span>
+              <input
+                type="text"
+                value={alt}
+                onChange={(e) => setAlt(e.target.value)}
+                placeholder={t.imageAltPlaceholder}
+              />
+            </label>
+          )}
           <ImageLinkFields
             t={t}
             mode={linkMode}
             onModeChange={setLinkMode}
             url={linkUrl}
             onUrlChange={setLinkUrl}
+            openInNewTab={openInNewTab}
+            onOpenInNewTabChange={setOpenInNewTab}
+            nofollow={nofollow}
+            onNofollowChange={setNofollow}
+            allowLightbox={!isVideo}
+            fileOptionLabel={isVideo ? t.imageLinkFileVideo : t.imageLinkFile}
+            fileHint={isVideo ? t.imageLinkFileHintVideo : t.imageLinkFileHint}
+            legend={isVideo ? t.videoLinkTitle : t.imageLinkTitle}
           />
-          <p className="te-hint">{t.imageHint}</p>
+          <p className="te-hint">{isVideo ? t.videoHint : t.imageHint}</p>
           {error ? <p className="te-error">{error}</p> : null}
         </form>
       ) : (
         <form onSubmit={handleUrl} className="te-form">
           <label className="te-field">
-            <span>{t.imageUrl}</span>
+            <span>{isVideo ? t.videoUrl : t.imageUrl}</span>
             <input
               type="url"
               dir="ltr"
@@ -598,21 +731,31 @@ export function ImageDialog({
               required
             />
           </label>
-          <label className="te-field">
-            <span>{t.imageAlt}</span>
-            <input
-              type="text"
-              value={alt}
-              onChange={(e) => setAlt(e.target.value)}
-              placeholder={t.imageAltPlaceholder}
-            />
-          </label>
+          {isVideo ? null : (
+            <label className="te-field">
+              <span>{t.imageAlt}</span>
+              <input
+                type="text"
+                value={alt}
+                onChange={(e) => setAlt(e.target.value)}
+                placeholder={t.imageAltPlaceholder}
+              />
+            </label>
+          )}
           <ImageLinkFields
             t={t}
             mode={linkMode}
             onModeChange={setLinkMode}
             url={linkUrl}
             onUrlChange={setLinkUrl}
+            openInNewTab={openInNewTab}
+            onOpenInNewTabChange={setOpenInNewTab}
+            nofollow={nofollow}
+            onNofollowChange={setNofollow}
+            allowLightbox={!isVideo}
+            fileOptionLabel={isVideo ? t.imageLinkFileVideo : t.imageLinkFile}
+            fileHint={isVideo ? t.imageLinkFileHintVideo : t.imageLinkFileHint}
+            legend={isVideo ? t.videoLinkTitle : t.imageLinkTitle}
           />
           {error ? <p className="te-error">{error}</p> : null}
         </form>
@@ -627,33 +770,50 @@ export function ImageLinkDialog({
   onSubmit,
   initialMode = 'none',
   initialUrl = '',
+  initialOpenInNewTab = false,
+  initialNofollow = false,
+  allowLightbox = true,
+  fileOptionLabel,
+  fileHint,
+  legend,
+  title,
   t,
 }) {
   const [mode, setMode] = useState(initialMode);
   const [url, setUrl] = useState(initialUrl);
+  const [openInNewTab, setOpenInNewTab] = useState(initialOpenInNewTab);
+  const [nofollow, setNofollow] = useState(initialNofollow);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
-      setMode(initialMode);
+      setMode(initialMode === 'lightbox' && !allowLightbox ? 'none' : initialMode);
       setUrl(initialUrl);
+      setOpenInNewTab(initialOpenInNewTab);
+      setNofollow(initialNofollow);
       setError('');
       setBusy(false);
     }
-  }, [open, initialMode, initialUrl]);
+  }, [open, initialMode, initialUrl, initialOpenInNewTab, initialNofollow, allowLightbox]);
+
+  const linkFlags = () =>
+    mode === 'url' || mode === 'file'
+      ? { openInNewTab, nofollow }
+      : { openInNewTab: false, nofollow: false };
 
   const confirm = async () => {
     setError('');
     setBusy(true);
     try {
+      const flags = linkFlags();
       if (mode === 'none') {
-        await onSubmit({ mode: 'none', href: '' });
+        await onSubmit({ mode: 'none', href: '', ...flags });
         onClose();
         return;
       }
       if (mode === 'lightbox' || mode === 'file') {
-        await onSubmit({ mode, href: '' });
+        await onSubmit({ mode, href: '', ...flags });
         onClose();
         return;
       }
@@ -663,7 +823,7 @@ export function ImageLinkDialog({
           setError(t.imageLinkUrlRequired);
           return;
         }
-        await onSubmit({ mode: 'url', href: trimmed });
+        await onSubmit({ mode: 'url', href: trimmed, ...flags });
         onClose();
         return;
       }
@@ -682,7 +842,7 @@ export function ImageLinkDialog({
   return (
     <Modal
       open={open}
-      title={t.imageLinkTitle}
+      title={title || t.imageLinkTitle}
       onClose={onClose}
       closeLabel={t.close}
       footer={
@@ -708,6 +868,14 @@ export function ImageLinkDialog({
           onModeChange={setMode}
           url={url}
           onUrlChange={setUrl}
+          openInNewTab={openInNewTab}
+          onOpenInNewTabChange={setOpenInNewTab}
+          nofollow={nofollow}
+          onNofollowChange={setNofollow}
+          allowLightbox={allowLightbox}
+          fileOptionLabel={fileOptionLabel}
+          fileHint={fileHint}
+          legend={legend}
         />
         {error ? <p className="te-error">{error}</p> : null}
       </form>

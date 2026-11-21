@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
@@ -27,11 +28,22 @@ import {
   preparePastedHtml,
 } from './paste.js';
 import { formatHtml } from './formatHtml.js';
-import { processImageUpload } from './upload.js';
+import {
+  cloneWithCaretMarks,
+  insertMarksInSource,
+  pointInEditor,
+  readEditorSelection,
+  restoreCaretPoints,
+  scrollCaretIntoView,
+  takeMarksFromDom,
+  takeMarksFromHtml,
+} from './caretMap.js';
+import { processImageUpload, processVideoUpload } from './upload.js';
 import { createHistory } from './history.js';
 import { getMessages, getDefaultDir, resolveLanguage } from './i18n.js';
 import {
   applyFormat,
+  focusEditor,
   getActiveStates,
   handleAccordionKeyDown,
   handleAccordionBeforeInput,
@@ -40,10 +52,12 @@ import {
   accordionCommand,
   getAccordionItemAtTarget,
   getLinkAtSelection,
+  getLinkOptionsFromAnchor,
   getCtaAtSelection,
   isCtaAnchor,
   getRangeText,
   insertImage,
+  insertVideo,
   insertLink,
   insertHtmlContent,
   getEditorClipboardPayload,
@@ -89,12 +103,13 @@ function normalizeEmpty(html) {
 }
 
 async function resolveImageLink(link) {
-  if (!link || link.mode === 'none') return { mode: 'none', href: '' };
-  if (link.mode === 'lightbox' || link.mode === 'file') {
-    return { mode: link.mode, href: '' };
-  }
-  if (link.mode === 'url') return { mode: 'url', href: link.href };
-  return { mode: 'none', href: '' };
+  const openInNewTab = !!link?.openInNewTab;
+  const nofollow = !!link?.nofollow;
+  if (!link || link.mode === 'none') return { mode: 'none', href: '', openInNewTab: false, nofollow: false };
+  if (link.mode === 'lightbox') return { mode: 'lightbox', href: '', openInNewTab: false, nofollow: false };
+  if (link.mode === 'file') return { mode: 'file', href: '', openInNewTab, nofollow };
+  if (link.mode === 'url') return { mode: 'url', href: link.href, openInNewTab, nofollow };
+  return { mode: 'none', href: '', openInNewTab: false, nofollow: false };
 }
 
 function stripSelectionClasses(html) {
@@ -174,10 +189,21 @@ export const TeemEditor = forwardRef(function TeemEditor(
   const [canRedo, setCanRedo] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkEditing, setLinkEditing] = useState(false);
-  const [linkDraft, setLinkDraft] = useState({ url: '', text: '' });
+  const [linkDraft, setLinkDraft] = useState({
+    url: '',
+    text: '',
+    openInNewTab: false,
+    nofollow: false,
+  });
   const [ctaOpen, setCtaOpen] = useState(false);
   const [ctaEditing, setCtaEditing] = useState(false);
-  const [ctaDraft, setCtaDraft] = useState({ url: '', text: '', classes: '' });
+  const [ctaDraft, setCtaDraft] = useState({
+    url: '',
+    text: '',
+    classes: '',
+    openInNewTab: false,
+    nofollow: false,
+  });
   const ctaEditAnchorRef = useRef(null);
   const [linkPopover, setLinkPopover] = useState(null);
   const linkPopoverAnchorRef = useRef(null);
@@ -188,11 +214,23 @@ export const TeemEditor = forwardRef(function TeemEditor(
   const [altOpen, setAltOpen] = useState(false);
   const [altDraft, setAltDraft] = useState('');
   const [imageLinkOpen, setImageLinkOpen] = useState(false);
-  const [imageLinkDraft, setImageLinkDraft] = useState({ mode: 'none', href: '' });
+  const [imageLinkDraft, setImageLinkDraft] = useState({
+    mode: 'none',
+    href: '',
+    openInNewTab: false,
+    nofollow: false,
+    allowLightbox: true,
+  });
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const [isEmpty, setIsEmpty] = useState(true);
   const [sourceMode, setSourceMode] = useState(false);
   const [sourceCode, setSourceCode] = useState('');
+  const [sourceCursor, setSourceCursor] = useState(null);
+  const sourceModeRef = useRef(false);
+  const sourceViewRef = useRef(null);
+  const pendingVisualCaretRef = useRef(null);
+  const suppressValueRef = useRef(null);
+  sourceModeRef.current = sourceMode;
   const [markdownOpen, setMarkdownOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [tableMenu, setTableMenu] = useState(null);
@@ -269,6 +307,11 @@ export const TeemEditor = forwardRef(function TeemEditor(
   useEffect(() => {
     if (value === undefined || !editorRef.current) return;
     const clean = sanitizeHtml(normalizeEmpty(value));
+    const guard = suppressValueRef.current;
+    if (guard) {
+      if (guard.value === value && clean !== lastHtmlRef.current) return;
+      suppressValueRef.current = null;
+    }
     if (clean !== lastHtmlRef.current) {
       const sel = saveSelection(editorRef.current);
       editorRef.current.innerHTML = clean;
@@ -283,6 +326,35 @@ export const TeemEditor = forwardRef(function TeemEditor(
     if (!editorRef.current) return;
     setStates(getActiveStates(editorRef.current));
   }, []);
+
+  const applyPendingVisualCaret = useCallback(() => {
+    const pending = pendingVisualCaretRef.current;
+    const editor = editorRef.current;
+    if (!pending || !editor) return false;
+    const anchor = pointInEditor(editor, pending.anchor) ? pending.anchor : null;
+    const head = pointInEditor(editor, pending.head) ? pending.head : anchor;
+    if (!anchor) return false;
+    focusEditor(editor);
+    if (!restoreCaretPoints(anchor, head)) return false;
+    const saved = saveSelection(editor);
+    if (saved) savedRangeRef.current = saved;
+    scrollCaretIntoView(head || anchor);
+    refreshStates();
+    return true;
+  }, [refreshStates]);
+
+  useLayoutEffect(() => {
+    if (sourceMode) return undefined;
+    if (!pendingVisualCaretRef.current) return undefined;
+    if (applyPendingVisualCaret()) {
+      pendingVisualCaretRef.current = null;
+      return undefined;
+    }
+    const frame = requestAnimationFrame(() => {
+      if (applyPendingVisualCaret()) pendingVisualCaretRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [sourceMode, applyPendingVisualCaret]);
 
   useEffect(() => {
     const onSel = () => {
@@ -535,7 +607,14 @@ export const TeemEditor = forwardRef(function TeemEditor(
     if (!img) return;
     selectedImageRef.current = img;
     const info = getImageLinkInfo(img);
-    setImageLinkDraft({ mode: info.mode, href: info.href });
+    const isVideo = img.tagName === 'VIDEO';
+    setImageLinkDraft({
+      mode: info.mode,
+      href: info.href,
+      openInNewTab: info.openInNewTab,
+      nofollow: info.nofollow,
+      allowLightbox: !isVideo,
+    });
     setImageLinkOpen(true);
   }, []);
 
@@ -615,6 +694,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
       setLinkDraft({
         url: anchor.getAttribute('href') || '',
         text: anchor.textContent || '',
+        ...getLinkOptionsFromAnchor(anchor),
       });
       clearLinkPopover();
       setLinkOpen(true);
@@ -631,6 +711,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
         url: anchor.getAttribute('href') || '',
         text: anchor.textContent || '',
         classes: anchor.getAttribute('class') || '',
+        ...getLinkOptionsFromAnchor(anchor),
       });
       clearLinkPopover();
       setCtaOpen(true);
@@ -833,7 +914,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
         e.preventDefault();
         e.stopPropagation();
         const figure = target.closest('.te-figure');
-        const img = figure?.querySelector('img');
+        const img = figure?.querySelector('img, video');
         if (img && editorRef.current) {
           startImageResize(img, e, {
             editor: editorRef.current,
@@ -855,7 +936,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
         e.preventDefault();
         e.stopPropagation();
         const figure = target.closest('.te-figure');
-        const img = figure?.querySelector('img');
+        const img = figure?.querySelector('img, video');
         if (img) openImageLinkEditor(img);
         return;
       }
@@ -870,15 +951,23 @@ export const TeemEditor = forwardRef(function TeemEditor(
         return;
       }
 
-      const img = target.closest('img');
+      const img = target.closest('img, video');
       const figure = target.closest('.te-figure');
 
       if (img && editorRef.current.contains(img)) {
-        e.preventDefault();
-        selectImage(img, editorRef.current, messagesRef.current);
-        selectedImageRef.current = img;
-        savedRangeRef.current = saveSelection(editorRef.current);
-        refreshStates();
+        const alreadySelected =
+          img.tagName === 'VIDEO' && img.closest('.te-figure')?.classList.contains('is-selected');
+        const anchor = img.closest('a[href]');
+        if (anchor) {
+          anchor.addEventListener('click', (ev) => ev.preventDefault(), { capture: true, once: true });
+        }
+        if (!alreadySelected) {
+          e.preventDefault();
+          selectImage(img, editorRef.current, messagesRef.current);
+          selectedImageRef.current = img;
+          savedRangeRef.current = saveSelection(editorRef.current);
+          refreshStates();
+        }
         return;
       }
 
@@ -929,11 +1018,16 @@ export const TeemEditor = forwardRef(function TeemEditor(
     (e) => {
       const target = e.target;
       if (!(target instanceof Element) || !editorRef.current) return;
-      const img = target.closest('img');
+      const img = target.closest('img, video');
       const figure = target.closest('.te-figure');
-      const image = img || figure?.querySelector('img');
+      const image = img || figure?.querySelector('img, video');
       if (image && editorRef.current.contains(image)) {
         e.preventDefault();
+        if (image.tagName === 'VIDEO') {
+          selectImage(image, editorRef.current, messagesRef.current);
+          selectedImageRef.current = image;
+          return;
+        }
         const linkInfo = getImageLinkInfo(image);
         if (linkInfo.mode === IMAGE_LINK_LIGHTBOX) {
           setLightboxSrc(linkInfo.href || image.getAttribute('src') || image.src);
@@ -964,6 +1058,8 @@ export const TeemEditor = forwardRef(function TeemEditor(
       url: '',
       text: getRangeText(savedRangeRef.current),
       classes: '',
+      openInNewTab: false,
+      nofollow: false,
     });
     setCtaOpen(true);
   }, [rememberSelection, openCtaEditor]);
@@ -991,6 +1087,8 @@ export const TeemEditor = forwardRef(function TeemEditor(
     setLinkDraft({
       url: '',
       text: getRangeText(savedRangeRef.current),
+      openInNewTab: false,
+      nofollow: false,
     });
     setLinkOpen(true);
   }, [rememberSelection, openCtaEditor, openLinkEditor]);
@@ -1030,36 +1128,52 @@ export const TeemEditor = forwardRef(function TeemEditor(
     if (disabled) return;
 
     if (!sourceMode) {
-      // Visual → HTML
+      // Visual → HTML, keeping the caret on the same text.
+      const editor = editorRef.current;
       clearLinkPopover();
-      clearImageSelection(editorRef.current);
+      const selection = editor ? readEditorSelection(editor, savedRangeRef.current) : null;
+      const clone = editor ? cloneWithCaretMarks(editor, selection) : null;
+      clearImageSelection(editor);
       selectedImageRef.current = null;
-      const html = sanitizeHtml(stripSelectionClasses(readHtml()));
-      setSourceCode(formatHtml(html));
+      const raw = clone ? clone.innerHTML : readHtml();
+      const formatted = formatHtml(sanitizeHtml(stripSelectionClasses(raw)));
+      const mapped = takeMarksFromHtml(formatted);
+      const cursor = mapped.selection || { anchor: 0, head: 0 };
+      pendingVisualCaretRef.current = null;
+      setSourceCursor(cursor);
+      setSourceCode(mapped.html);
       setSourceMode(true);
       return;
     }
 
-    // HTML → Visual (sanitize user-edited source)
-    const clean = sanitizeHtml(normalizeEmpty(sourceCode));
-    if (editorRef.current) {
-      editorRef.current.innerHTML = clean;
+    // HTML → Visual. Read the live source cursor before the editor unmounts.
+    const editor = editorRef.current;
+    const view = sourceViewRef.current;
+    const code = view ? view.state.doc.toString() : sourceCode;
+    const main = view?.state.selection.main;
+    const anchor = main ? main.anchor : 0;
+    const head = main ? main.head : anchor;
+    const marked = insertMarksInSource(code, anchor, head);
+    if (editor) {
+      editor.innerHTML = sanitizeHtml(normalizeEmpty(marked));
+      pendingVisualCaretRef.current = takeMarksFromDom(editor);
     }
+    const clean = sanitizeHtml(normalizeEmpty(editor ? editor.innerHTML : marked));
     lastHtmlRef.current = clean;
     setIsEmpty(isEditorContentEmpty(clean));
     historyRef.current.push(clean);
     syncHistoryFlags();
+    suppressValueRef.current = { value };
     onChange?.(clean);
     setSourceMode(false);
-    refreshStates();
   }, [
     disabled,
     sourceMode,
     sourceCode,
+    value,
     readHtml,
     onChange,
     syncHistoryFlags,
-    refreshStates,
     clearLinkPopover,
   ]);
 
@@ -1068,6 +1182,7 @@ export const TeemEditor = forwardRef(function TeemEditor(
   }, []);
 
   const handleSourceBlur = useCallback(() => {
+    if (!sourceModeRef.current) return;
     // Keep parent in sync while editing source (sanitized lightly on leave)
     const clean = sanitizeHtml(normalizeEmpty(sourceCode));
     lastHtmlRef.current = clean;
@@ -1184,8 +1299,12 @@ export const TeemEditor = forwardRef(function TeemEditor(
         {sourceMode ? (
           <SourceEditor
             value={sourceCode}
+            cursor={sourceCursor}
             onChange={handleSourceChange}
             onBlur={handleSourceBlur}
+            onView={(view) => {
+              sourceViewRef.current = view;
+            }}
             disabled={disabled}
             minHeight={minHeight}
             noscroll={noscroll}
@@ -1243,15 +1362,18 @@ export const TeemEditor = forwardRef(function TeemEditor(
         onClose={closeLinkDialog}
         initialUrl={linkDraft.url}
         initialText={linkDraft.text}
+        initialOpenInNewTab={linkDraft.openInNewTab}
+        initialNofollow={linkDraft.nofollow}
         isEdit={linkEditing}
         t={t}
-        onSubmit={({ url, text }) => {
+        onSubmit={({ url, text, openInNewTab, nofollow }) => {
+          const linkOptions = { openInNewTab, nofollow };
           withSelection(() => {
             const anchor = linkEditAnchorRef.current;
             if (linkEditing && anchor && editorRef.current?.contains(anchor)) {
-              updateLink(editorRef.current, anchor, url, text, messagesRef.current);
+              updateLink(editorRef.current, anchor, url, text, messagesRef.current, linkOptions);
             } else {
-              insertLink(editorRef.current, url, text, messagesRef.current);
+              insertLink(editorRef.current, url, text, messagesRef.current, linkOptions);
             }
           });
           closeLinkDialog();
@@ -1264,15 +1386,18 @@ export const TeemEditor = forwardRef(function TeemEditor(
         initialUrl={ctaDraft.url}
         initialText={ctaDraft.text}
         initialClasses={ctaDraft.classes}
+        initialOpenInNewTab={ctaDraft.openInNewTab}
+        initialNofollow={ctaDraft.nofollow}
         isEdit={ctaEditing}
         t={t}
-        onSubmit={({ url, text, classes }) => {
+        onSubmit={({ url, text, classes, openInNewTab, nofollow }) => {
+          const linkOptions = { openInNewTab, nofollow };
           withSelection(() => {
             const anchor = ctaEditAnchorRef.current;
             if (ctaEditing && anchor && editorRef.current?.contains(anchor)) {
-              updateCta(editorRef.current, anchor, url, text, classes, messagesRef.current);
+              updateCta(editorRef.current, anchor, url, text, classes, messagesRef.current, linkOptions);
             } else {
-              insertCta(editorRef.current, url, text, classes, messagesRef.current);
+              insertCta(editorRef.current, url, text, classes, messagesRef.current, linkOptions);
             }
           });
           closeCtaDialog();
@@ -1283,39 +1408,40 @@ export const TeemEditor = forwardRef(function TeemEditor(
         open={imageOpen && !sourceMode}
         onClose={closeImageDialog}
         t={t}
-        onSubmitUrl={async ({ url, alt, link }) => {
+        onSubmitUrl={async ({ kind, url, alt, link }) => {
           rememberSelection();
           restoreSelection(savedRangeRef.current);
           const resolvedLink = await resolveImageLink(link);
-          const img = insertImage(
-            editorRef.current,
-            url,
-            alt,
-            resolvedLink,
-            messagesRef.current
-          );
+          const media =
+            kind === 'video'
+              ? insertVideo(editorRef.current, url, resolvedLink, messagesRef.current)
+              : insertImage(editorRef.current, url, alt, resolvedLink, messagesRef.current);
           closeImageDialog();
-          await finishImageInsert(img);
+          await finishImageInsert(media);
         }}
-        onSubmitFile={async ({ file, alt, link }) => {
-          const src = await processImageUpload(file, {
-            ...uploadOptions,
-            onUpload,
-            language: lang,
-            messages: messagesRef.current,
-          });
+        onSubmitFile={async ({ kind, file, alt, link }) => {
+          const src =
+            kind === 'video'
+              ? await processVideoUpload(file, {
+                  onUpload,
+                  language: lang,
+                  messages: messagesRef.current,
+                })
+              : await processImageUpload(file, {
+                  ...uploadOptions,
+                  onUpload,
+                  language: lang,
+                  messages: messagesRef.current,
+                });
           rememberSelection();
           restoreSelection(savedRangeRef.current);
           const resolvedLink = await resolveImageLink(link);
-          const img = insertImage(
-            editorRef.current,
-            src,
-            alt,
-            resolvedLink,
-            messagesRef.current
-          );
+          const media =
+            kind === 'video'
+              ? insertVideo(editorRef.current, src, resolvedLink, messagesRef.current)
+              : insertImage(editorRef.current, src, alt, resolvedLink, messagesRef.current);
           closeImageDialog();
-          await finishImageInsert(img);
+          await finishImageInsert(media);
         }}
       />
 
@@ -1324,6 +1450,13 @@ export const TeemEditor = forwardRef(function TeemEditor(
         onClose={closeImageLinkDialog}
         initialMode={imageLinkDraft.mode}
         initialUrl={imageLinkDraft.href}
+        initialOpenInNewTab={imageLinkDraft.openInNewTab}
+        initialNofollow={imageLinkDraft.nofollow}
+        allowLightbox={imageLinkDraft.allowLightbox !== false}
+        fileOptionLabel={imageLinkDraft.allowLightbox === false ? t.imageLinkFileVideo : t.imageLinkFile}
+        fileHint={imageLinkDraft.allowLightbox === false ? t.imageLinkFileHintVideo : t.imageLinkFileHint}
+        legend={imageLinkDraft.allowLightbox === false ? t.videoLinkTitle : t.imageLinkTitle}
+        title={imageLinkDraft.allowLightbox === false ? t.videoLinkTitle : t.imageLinkTitle}
         t={t}
         onSubmit={async (link) => {
           const img = selectedImageRef.current;

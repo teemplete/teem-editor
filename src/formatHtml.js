@@ -37,6 +37,7 @@ const BLOCK_TAGS = new Set([
   'thead',
   'tr',
   'ul',
+  'video',
 ]);
 
 const VOID_TAGS = new Set([
@@ -170,6 +171,10 @@ function formatNode(node, depth, lines) {
   if (node.nodeType === Node.ELEMENT_NODE) {
     formatElement(node, depth, lines);
   }
+}
+
+export function isBlockTagName(tag) {
+  return isBlockTag(String(tag || '').toLowerCase());
 }
 
 /**

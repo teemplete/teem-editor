@@ -48,6 +48,7 @@ export declare function sanitizeHtml(dirty: string): string;
 export declare function flattenStyleSpans(root: ParentNode): void;
 export declare function isSafeHref(url: string): boolean;
 export declare function isSafeImageSrc(url: string): boolean;
+export declare function isSafeVideoSrc(url: string): boolean;
 
 export declare function validateImageFile(
   file: File | Blob,
@@ -64,7 +65,28 @@ export declare function processImageUpload(
   options?: UploadOptions
 ): Promise<string>;
 
+export declare function validateVideoFile(
+  file: File | Blob,
+  options?: UploadOptions
+): Promise<{
+  ok: boolean;
+  errors: string[];
+  mime?: string;
+  safeName?: string;
+}>;
+
+export declare function processVideoUpload(
+  file: File | Blob,
+  options?: UploadOptions
+): Promise<string>;
+
 export declare const uploadDefaults: {
+  maxSizeBytes: number;
+  allowedMimeTypes: string[];
+  allowedExtensions: string[];
+};
+
+export declare const videoUploadDefaults: {
   maxSizeBytes: number;
   allowedMimeTypes: string[];
   allowedExtensions: string[];

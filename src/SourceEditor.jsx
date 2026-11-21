@@ -61,15 +61,34 @@ const teSourceLayout = EditorView.baseTheme({
   },
 });
 
+function clampCursor(offset, length) {
+  const n = Number(offset) || 0;
+  return Math.max(0, Math.min(n, length));
+}
+
 export function SourceEditor({
   value,
   onChange,
   onBlur,
+  onView,
+  cursor = null,
   disabled = false,
   minHeight = 220,
   noscroll = false,
   ariaLabel,
 }) {
+  const placeCursor = (view) => {
+    onView?.(view);
+    const len = view.state.doc.length;
+    const anchor = clampCursor(cursor?.anchor ?? 0, len);
+    const head = clampCursor(cursor?.head ?? anchor, len);
+    view.dispatch({
+      selection: { anchor, head },
+      scrollIntoView: true,
+    });
+    view.focus();
+  };
+
   const extensions = useMemo(
     () => [
       html(),
@@ -98,7 +117,23 @@ export function SourceEditor({
         minHeight={`${minHeight}px`}
         theme={teSourceDarkTheme}
         extensions={extensions}
+        selection={
+          cursor
+            ? {
+                anchor: clampCursor(cursor.anchor, value.length),
+                head: clampCursor(cursor.head ?? cursor.anchor, value.length),
+              }
+            : undefined
+        }
+        autoFocus
         onChange={onChange}
+        onCreateEditor={(view) => {
+          placeCursor(view);
+          requestAnimationFrame(() => {
+            if (!view.dom.isConnected) return;
+            placeCursor(view);
+          });
+        }}
         editable={!disabled}
         basicSetup={{
           lineNumbers: true,
